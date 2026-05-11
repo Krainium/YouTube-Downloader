@@ -25,11 +25,136 @@ export interface VideoInfo {
   formats: VideoFormat[];
 }
 
+function extractVideoId(input: string): string | null {
+  try {
+    const url = new URL(input);
+    if (url.hostname.includes("youtu.be")) return url.pathname.slice(1).split("?")[0];
+    if (url.hostname.includes("youtube.com")) {
+      const v = url.searchParams.get("v");
+      if (v) return v;
+      const m = url.pathname.match(/\/(?:embed|shorts|v)\/([A-Za-z0-9_-]{11})/);
+      if (m) return m[1];
+    }
+    return null;
+  } catch {
+    const m = input.match(/[A-Za-z0-9_-]{11}/);
+    return m ? m[0] : null;
+  }
+}
+
+function parseFormats(streaming: Record<string, unknown>): VideoFormat[] {
+  const muxedRaw = (streaming.formats as Record<string, unknown>[] | undefined) || [];
+  const adaptiveRaw = (streaming.adaptiveFormats as Record<string, unknown>[] | undefined) || [];
+
+  const muxed: VideoFormat[] = muxedRaw.map((f) => ({
+    itag: f.itag as number,
+    mimeType: f.mimeType as string,
+    quality: f.quality as string,
+    qualityLabel: f.qualityLabel as string | undefined,
+    bitrate: f.bitrate as number | undefined,
+    width: f.width as number | undefined,
+    height: f.height as number | undefined,
+    fps: f.fps as number | undefined,
+    contentLength: f.contentLength as string | undefined,
+    approxDurationMs: f.approxDurationMs as string | undefined,
+    url: f.url as string | undefined,
+    type: "muxed" as const,
+  }));
+
+  const adaptive: VideoFormat[] = adaptiveRaw.map((f) => ({
+    itag: f.itag as number,
+    mimeType: f.mimeType as string,
+    quality: f.quality as string,
+    qualityLabel: f.qualityLabel as string | undefined,
+    bitrate: f.bitrate as number | undefined,
+    width: f.width as number | undefined,
+    height: f.height as number | undefined,
+    fps: f.fps as number | undefined,
+    contentLength: f.contentLength as string | undefined,
+    approxDurationMs: f.approxDurationMs as string | undefined,
+    url: f.url as string | undefined,
+    type: ((f.mimeType as string || "").startsWith("audio/") ? "audio" : "video") as "audio" | "video",
+  }));
+
+  return [...muxed, ...adaptive].filter((f) => f.url);
+}
+
+async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
+  const pageUrl = `https://www.youtube.com/watch?v=${videoId}&hl=en`;
+
+  const res = await fetch(pageUrl, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept":
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+      "Accept-Encoding": "identity",
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+      "Upgrade-Insecure-Requests": "1",
+    },
+  });
+
+  if (!res.ok) throw new Error(`YouTube page fetch failed: ${res.status}`);
+  const html = await res.text();
+
+  const patterns = [
+    /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;(?:var |<\/script>)/s,
+    /ytInitialPlayerResponse\s*=\s*(\{.+?\});/s,
+  ];
+
+  let playerData: Record<string, unknown> | null = null;
+  for (const pat of patterns) {
+    const m = html.match(pat);
+    if (m) {
+      try {
+        playerData = JSON.parse(m[1]);
+        break;
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  if (!playerData) throw new Error("Could not extract player data from page");
+
+  const ps = (playerData.playabilityStatus as Record<string, unknown>) || {};
+  const status = ps.status as string;
+  if (status && status !== "OK") {
+    const reason = (ps.reason as string) || status;
+    throw new Error(`Video not available: ${reason}`);
+  }
+
+  const details = (playerData.videoDetails as Record<string, unknown>) || {};
+  const streaming = (playerData.streamingData as Record<string, unknown>) || {};
+
+  const thumbArr = (details.thumbnail as Record<string, unknown[]> | undefined)
+    ?.thumbnails as Array<{ url: string }> | undefined;
+  const thumbnailUrl =
+    thumbArr
+      ? thumbArr[thumbArr.length - 1]?.url
+      : `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`;
+
+  return {
+    videoId,
+    title: (details.title as string) || "Unknown Title",
+    author: (details.author as string) || "Unknown",
+    lengthSeconds: (details.lengthSeconds as string) || "0",
+    viewCount: (details.viewCount as string) || "0",
+    thumbnail: thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+    description: ((details.shortDescription as string) || "").slice(0, 200),
+    formats: parseFormats(streaming),
+  };
+}
+
 const ANDROID_VR_CLIENT = {
   clientName: "ANDROID_VR",
   clientVersion: "1.60.19",
   androidSdkVersion: 32,
-  userAgent: "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12; Build/SQ3A.220705.003.A1) gzip",
+  userAgent:
+    "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12; Build/SQ3A.220705.003.A1) gzip",
   apiKey: "AIzaSyDCU8hByM-4DrUqRUYnGn-3llEO78bcxq8",
 };
 
@@ -79,34 +204,15 @@ function randomVisitorData(): string {
   const ts = Math.floor(Date.now() / 1000) - Math.floor(Math.random() * 600000);
   const pb = concat(
     protoString(1, randStr(11)),
-    protoField(5, 0), varint(ts),
+    protoField(5, 0),
+    varint(ts),
     protoBytes(6, e),
   );
-  const b64 = btoa(Array.from(pb).map(b => String.fromCharCode(b)).join(""));
+  const b64 = btoa(Array.from(pb).map((b) => String.fromCharCode(b)).join(""));
   return encodeURIComponent(b64.replace(/\+/g, "-").replace(/\//g, "_"));
 }
 
-function extractVideoId(input: string): string | null {
-  try {
-    const url = new URL(input);
-    if (url.hostname.includes("youtu.be")) return url.pathname.slice(1).split("?")[0];
-    if (url.hostname.includes("youtube.com")) {
-      const v = url.searchParams.get("v");
-      if (v) return v;
-      const m = url.pathname.match(/\/(?:embed|shorts|v)\/([A-Za-z0-9_-]{11})/);
-      if (m) return m[1];
-    }
-    return null;
-  } catch {
-    const m = input.match(/[A-Za-z0-9_-]{11}/);
-    return m ? m[0] : null;
-  }
-}
-
-export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
-  const videoId = extractVideoId(urlOrId) || urlOrId;
-  if (!videoId || videoId.length < 8) throw new Error("Invalid YouTube URL or video ID");
-
+async function fetchViaInnertube(videoId: string): Promise<VideoInfo> {
   const visitorData = randomVisitorData();
   const apiUrl = `https://www.youtube.com/youtubei/v1/player?key=${ANDROID_VR_CLIENT.apiKey}&prettyPrint=false`;
 
@@ -163,41 +269,10 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
 
   const details = data?.videoDetails || {};
   const streaming = data?.streamingData || {};
-
   const thumb = details?.thumbnail?.thumbnails;
-  const thumbnailUrl = thumb ? thumb[thumb.length - 1]?.url : `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`;
-
-  const muxedFormats: VideoFormat[] = (streaming.formats || []).map((f: Record<string, unknown>) => ({
-    itag: f.itag as number,
-    mimeType: f.mimeType as string,
-    quality: f.quality as string,
-    qualityLabel: f.qualityLabel as string | undefined,
-    bitrate: f.bitrate as number | undefined,
-    width: f.width as number | undefined,
-    height: f.height as number | undefined,
-    fps: f.fps as number | undefined,
-    contentLength: f.contentLength as string | undefined,
-    approxDurationMs: f.approxDurationMs as string | undefined,
-    url: f.url as string | undefined,
-    type: "muxed" as const,
-  }));
-
-  const adaptiveFormats: VideoFormat[] = (streaming.adaptiveFormats || []).map((f: Record<string, unknown>) => ({
-    itag: f.itag as number,
-    mimeType: f.mimeType as string,
-    quality: f.quality as string,
-    qualityLabel: f.qualityLabel as string | undefined,
-    bitrate: f.bitrate as number | undefined,
-    width: f.width as number | undefined,
-    height: f.height as number | undefined,
-    fps: f.fps as number | undefined,
-    contentLength: f.contentLength as string | undefined,
-    approxDurationMs: f.approxDurationMs as string | undefined,
-    url: f.url as string | undefined,
-    type: ((f.mimeType as string || "").startsWith("audio/") ? "audio" : "video") as "audio" | "video",
-  }));
-
-  const allFormats = [...muxedFormats, ...adaptiveFormats].filter(f => f.url);
+  const thumbnailUrl = thumb
+    ? thumb[thumb.length - 1]?.url
+    : `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`;
 
   return {
     videoId,
@@ -207,8 +282,25 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
     viewCount: details.viewCount || "0",
     thumbnail: thumbnailUrl,
     description: ((details.shortDescription as string) || "").slice(0, 200),
-    formats: allFormats,
+    formats: parseFormats(streaming),
   };
+}
+
+export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
+  const videoId = extractVideoId(urlOrId) || urlOrId;
+  if (!videoId || videoId.length < 8) throw new Error("Invalid YouTube URL or video ID");
+
+  try {
+    const info = await fetchViaPageScrape(videoId);
+    if (info.formats.length > 0) return info;
+    throw new Error("No formats from page scrape");
+  } catch (scrapeErr) {
+    try {
+      return await fetchViaInnertube(videoId);
+    } catch {
+      throw scrapeErr;
+    }
+  }
 }
 
 export function humanSize(bytes: number): string {
