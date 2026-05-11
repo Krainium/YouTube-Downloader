@@ -661,8 +661,8 @@ async function fetchNextData(videoId: string, useProxy: boolean): Promise<NextEn
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const anyData = data as any;
-      const contents: unknown[] =
-        anyData?.contents?.twoColumnWatchNextResults?.results?.results?.contents || [];
+      const rawContents = anyData?.contents?.twoColumnWatchNextResults?.results?.results?.contents;
+      const contents: unknown[] = Array.isArray(rawContents) ? rawContents : [];
 
       for (const c of contents) {
         const item = c as Record<string, unknown>;
