@@ -18,6 +18,31 @@ type Phase =
   | "done"
   | "error";
 
+// Fetch a URL and return its bytes — replaces @ffmpeg/util fetchFile
+async function fetchBytes(url: string): Promise<Uint8Array> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} fetching stream`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+// Load the UMD build of @ffmpeg/ffmpeg via a plain <script> tag.
+// This completely bypasses Next.js webpack so no Worker bundling issues occur.
+// The UMD build auto-loads its worker chunk from the same directory (/814.ffmpeg.js).
+async function loadFFmpegUMD(): Promise<unknown> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const win = window as any;
+  if (!win.FFmpegWASM) {
+    await new Promise<void>((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/ffmpeg.js";
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("Failed to load /ffmpeg.js"));
+      document.head.appendChild(s);
+    });
+  }
+  return win.FFmpegWASM;
+}
+
 export default function MergeDownload({ info, videoFormats, audioFormats }: Props) {
   const [selectedItag, setSelectedItag] = useState<number>(videoFormats[0]?.itag ?? 0);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -38,29 +63,28 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
     setStatusMsg("Loading ffmpeg engine...");
 
     try {
-      const { FFmpeg } = await import("@ffmpeg/ffmpeg");
-      const { fetchFile } = await import("@ffmpeg/util");
+      // Load UMD build — no webpack, no blob URLs, no CSP issues
+      const FFmpegWASM = await loadFFmpegUMD() as { FFmpeg: new () => unknown };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ffmpeg: any = ffmpegRef.current ?? new FFmpegWASM.FFmpeg();
 
-      if (!ffmpegRef.current) {
-        const ffmpeg = new FFmpeg();
+      if (!ffmpeg.loaded) {
         ffmpeg.on("progress", ({ progress: p }: { progress: number }) => {
           setProgress(Math.min(99, Math.round(p * 100)));
         });
 
         setStatusMsg("Loading ffmpeg engine (cached after first use)...");
-
-        // Serve ffmpeg core from our own origin — avoids CSP blob: restrictions
-        // and cross-origin Worker issues entirely.
-        const origin = typeof window !== "undefined" ? window.location.origin : "";
+        const origin = window.location.origin;
         await ffmpeg.load({
+          // Proxy our own-origin URLs — worker uses importScripts() on these
           coreURL: `${origin}/api/ffmpeg-core?file=ffmpeg-core.js`,
           wasmURL: `${origin}/api/ffmpeg-core?file=ffmpeg-core.wasm`,
         });
-
+        ffmpegRef.current = ffmpeg;
+      } else {
         ffmpegRef.current = ffmpeg;
       }
 
-      const ffmpeg = ffmpegRef.current;
       const proxied = info.proxied ? "1" : "0";
 
       const videoMB = selectedVideo.contentLength
@@ -73,12 +97,12 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
       setPhase("fetching-video");
       setStatusMsg(`Fetching video stream (~${videoMB} MB)...`);
       const videoProxy = `/api/stream?url=${encodeURIComponent(selectedVideo.url)}&filename=video.mp4&proxied=${proxied}`;
-      await ffmpeg.writeFile("video.mp4", await fetchFile(videoProxy));
+      await ffmpeg.writeFile("video.mp4", await fetchBytes(videoProxy));
 
       setPhase("fetching-audio");
       setStatusMsg(`Fetching audio stream (~${audioMB} MB)...`);
       const audioProxy = `/api/stream?url=${encodeURIComponent(bestAudio.url)}&filename=audio.m4a&proxied=${proxied}`;
-      await ffmpeg.writeFile("audio.m4a", await fetchFile(audioProxy));
+      await ffmpeg.writeFile("audio.m4a", await fetchBytes(audioProxy));
 
       setPhase("merging");
       setStatusMsg("Muxing streams...");
@@ -92,9 +116,8 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
         "output.mp4",
       ]);
 
-      const data = await ffmpeg.readFile("output.mp4");
-      const u8 = data as Uint8Array;
-      const ab = new Uint8Array(u8).buffer as ArrayBuffer;
+      const data: Uint8Array = await ffmpeg.readFile("output.mp4");
+      const ab = new Uint8Array(data).buffer as ArrayBuffer;
       const blob = new Blob([ab], { type: "video/mp4" });
       const blobUrl = URL.createObjectURL(blob);
       const safeName = info.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 60).trim();
