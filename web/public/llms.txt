@@ -1,0 +1,54 @@
+# YTDL — YouTube Downloader
+
+> Free, browser-based YouTube video and audio downloader. No sign-in, no limits, no uploads required. Works on Android, iPhone, and desktop.
+
+## What it does
+
+YTDL lets you download any YouTube video directly. Paste a URL, choose a format, and download. For HD (720p+), Smart Merge combines separate video and audio streams in your browser using WebAssembly — nothing is uploaded to a server.
+
+## Capabilities
+
+- Download YouTube videos in MP4 and WebM — up to 4K (2160p)
+- Download audio-only tracks in M4A (AAC) and WebM (Opus)
+- Smart Merge: in-browser muxing with ffmpeg.wasm, no server upload
+- Shows full video metadata: views, publish date, subscriber count, duration
+- Supports youtube.com, youtu.be, YouTube Shorts, and embeds
+- Works on Android (Chrome), iPhone/iPad (Safari), and all desktop browsers
+
+## Format tabs
+
+- **Video + Audio**: Pre-muxed streams (up to 360p) + Smart Merge for HD up to 4K
+- **Video Only**: Adaptive video streams up to 4K — no audio track
+- **Audio Only**: All available audio streams at various bitrates
+
+## How to use
+
+1. Open https://ytdl-web-zeta.vercel.app
+2. Paste a YouTube video URL into the input field
+3. Click "Analyze & Get Formats"
+4. Select a tab: Video + Audio / Video Only / Audio Only
+5. Click Download (or Smart Merge for HD video with audio)
+
+## Smart Merge (HD download)
+
+YouTube distributes HD video (720p and above) and audio as separate DASH streams. Smart Merge:
+1. Downloads the selected video stream to your browser
+2. Downloads the best available audio stream to your browser
+3. Uses ffmpeg.wasm (WebAssembly) to mux them into a single MP4
+4. Triggers a download of the combined file
+
+No data leaves your device except to YouTube's CDN.
+
+## API endpoints (not public)
+
+- POST /api/info — accepts { url: string }, returns video metadata and format list
+- GET /api/stream — proxies a YouTube stream to the browser
+- GET /api/ffmpeg-core — proxies ffmpeg WebAssembly core
+
+## Source code
+
+https://github.com/Krainium/youtube (web/ subdirectory)
+
+## URL
+
+https://ytdl-web-zeta.vercel.app

@@ -24,6 +24,31 @@ html, body {
   font-family: 'Inter', system-ui, sans-serif;
   min-height: 100vh;
   overflow-x: hidden;
+  /* iOS safe area support */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Prevent iOS text-size-adjust on orientation change */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Remove tap highlight on iOS/Android */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Smooth touch scrolling on iOS */
+body {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Ensure buttons feel native on mobile */
+button, a {
+  touch-action: manipulation;
+  cursor: pointer;
 }
 
 ::selection { background: rgba(255,59,59,0.3); color: #fff; }
@@ -100,6 +125,7 @@ html, body {
 .btn-primary {
   background: linear-gradient(135deg, #ff3b3b, #cc2020);
   transition: all 0.2s ease;
+  min-height: 44px; /* iOS touch target */
 }
 .btn-primary:hover {
   background: linear-gradient(135deg, #ff5252, #e02929);
@@ -113,4 +139,17 @@ html, body {
   outline: none;
   border-color: rgba(255,59,59,0.6);
   box-shadow: 0 0 0 3px rgba(255,59,59,0.1), 0 0 20px rgba(255,59,59,0.1);
+}
+
+/* Ensure adequate touch targets on mobile */
+@media (max-width: 640px) {
+  .format-card button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Footer safe area on iOS */
+footer {
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
 }

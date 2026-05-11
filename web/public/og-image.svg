@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#080810"/>
+  <!-- Grid lines -->
+  <line x1="0" y1="315" x2="1200" y2="315" stroke="#1e1e30" stroke-width="1"/>
+  <line x1="600" y1="0" x2="600" y2="630" stroke="#1e1e30" stroke-width="1"/>
+  <!-- Glow -->
+  <ellipse cx="600" cy="280" rx="400" ry="180" fill="#ff3b3b" opacity="0.06"/>
+  <!-- Logo mark -->
+  <rect x="530" y="120" width="140" height="140" rx="32" fill="#12121f" stroke="#1e1e30" stroke-width="2"/>
+  <polygon points="570,148 650,200 570,252" fill="#ff3b3b"/>
+  <rect x="540" y="176" width="12" height="48" rx="4" fill="#ff3b3b" opacity="0.6"/>
+  <!-- Title -->
+  <text x="600" y="322" font-family="monospace" font-size="80" font-weight="900" fill="#e8e8f0" text-anchor="middle" letter-spacing="4">
+    <tspan fill="#ff3b3b">YT</tspan>DL
+  </text>
+  <!-- Tagline -->
+  <text x="600" y="370" font-family="system-ui,sans-serif" font-size="26" fill="#8888aa" text-anchor="middle">
+    Free YouTube Video &amp; Audio Downloader
+  </text>
+  <!-- Features row -->
+  <text x="600" y="430" font-family="monospace" font-size="18" fill="#4a4a6a" text-anchor="middle">
+    MP4 · WebM · M4A · 4K · 1080p · No sign-in · Android &amp; iPhone
+  </text>
+  <!-- URL -->
+  <text x="600" y="560" font-family="monospace" font-size="20" fill="#ff3b3b" text-anchor="middle" opacity="0.7">
+    ytdl-web-zeta.vercel.app
+  </text>
+  <!-- Corner marks -->
+  <polyline points="40,40 40,70 70,70" fill="none" stroke="#ff3b3b" stroke-width="2" opacity="0.4"/>
+  <polyline points="1160,40 1160,70 1130,70" fill="none" stroke="#ff3b3b" stroke-width="2" opacity="0.4"/>
+  <polyline points="40,590 40,560 70,560" fill="none" stroke="#ff3b3b" stroke-width="2" opacity="0.4"/>
+  <polyline points="1160,590 1160,560 1130,560" fill="none" stroke="#ff3b3b" stroke-width="2" opacity="0.4"/>
+</svg>

@@ -1,0 +1,14 @@
+{
+  "name": "YTDL — YouTube Downloader",
+  "short_name": "YTDL",
+  "description": "Download any YouTube video or audio in full quality. Free, no sign-in.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080810",
+  "theme_color": "#080810",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ],
+  "categories": ["utilities", "multimedia"],
+  "lang": "en"
+}

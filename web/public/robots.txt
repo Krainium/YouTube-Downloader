@@ -1,0 +1,32 @@
+User-agent: *
+Allow: /
+
+# AI crawlers — welcome
+User-agent: GPTBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: DuckDuckBot
+Allow: /
+
+# Block only internal API paths from indexing
+Disallow: /api/
+
+Sitemap: https://ytdl-web-zeta.vercel.app/sitemap.xml
