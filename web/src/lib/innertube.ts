@@ -1,40 +1,59 @@
-import { createHash } from "crypto";
-import { readFileSync, existsSync } from "fs";
-import { join } from "path";
-
 // ---------------------------------------------------------------------------
 // YouTube auth cookie loading.
 // Priority: YOUTUBE_COOKIES env var > cookies.txt file in project root.
 // The cookie string is the raw "Cookie" header value from an authenticated
 // browser session on youtube.com (copy from DevTools > Network > any request).
 // ---------------------------------------------------------------------------
-function loadYtCookies(): string {
-  if (process.env.YOUTUBE_COOKIES) return process.env.YOUTUBE_COOKIES.trim();
-  try {
-    const p = join(process.cwd(), "cookies.txt");
-    if (existsSync(p)) {
-      const raw = readFileSync(p, "utf-8").trim();
-      if (raw && !raw.startsWith("PASTE_")) return raw;
-    }
-  } catch { /* ignore */ }
-  return "";
-}
 
-// Cached once per cold start — cookies don't change mid-session.
-const YT_COOKIES = loadYtCookies();
+// Lazy-loaded — only runs on the server side (Next.js API routes).
+// No top-level Node.js imports so webpack can safely bundle this for the client.
+let _ytCookies: string | undefined;
+function getYtCookies(): string {
+  if (_ytCookies !== undefined) return _ytCookies;
+  if (process.env.YOUTUBE_COOKIES) {
+    _ytCookies = process.env.YOUTUBE_COOKIES.trim();
+    return _ytCookies;
+  }
+  // Only attempt fs access on the server side
+  if (typeof window === "undefined") {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require("fs") as typeof import("fs");
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const path = require("path") as typeof import("path");
+      const p = path.join(process.cwd(), "cookies.txt");
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, "utf-8").trim();
+        if (raw && !raw.startsWith("PASTE_")) {
+          _ytCookies = raw;
+          return _ytCookies;
+        }
+      }
+    } catch { /* no file, ignore */ }
+  }
+  _ytCookies = "";
+  return _ytCookies;
+}
 
 // Generate SAPISIDHASH Authorization header from SAPISID cookie value.
 // YouTube requires this for authenticated innertube API calls.
+// Uses Web Crypto API (SHA-1) — available in both Node.js 16+ and browsers.
 // Format: SAPISIDHASH {timestamp}_{SHA1("{timestamp} {SAPISID} https://www.youtube.com")}
-function buildSAPISIDHASH(cookieStr: string): string | null {
+async function buildSAPISIDHASH(cookieStr: string): Promise<string | null> {
   const m = cookieStr.match(/(?:^|;\s*)SAPISID=([^;]+)/);
   if (!m) return null;
   const sapisid = m[1].trim();
   const ts = Math.floor(Date.now() / 1000);
-  const hash = createHash("sha1")
-    .update(`${ts} ${sapisid} https://www.youtube.com`)
-    .digest("hex");
-  return `SAPISIDHASH ${ts}_${hash}`;
+  const msg = new TextEncoder().encode(`${ts} ${sapisid} https://www.youtube.com`);
+  try {
+    const hashBuf = await crypto.subtle.digest("SHA-1", msg);
+    const hash = Array.from(new Uint8Array(hashBuf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    return `SAPISIDHASH ${ts}_${hash}`;
+  } catch {
+    return null;
+  }
 }
 
 export interface VideoFormat {
@@ -427,7 +446,8 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
   };
 
   // Use real auth cookies when available, otherwise fall back to static consent cookies.
-  const cookieStr = YT_COOKIES ||
+  const ytCookies = getYtCookies();
+  const cookieStr = ytCookies ||
     "CONSENT=YES+cb; SOCS=CAESEwgDEgk0OTM1MDE2NzEaAmVuIAEaBgiA_LyoBg; YSC=DwKYExXM6hI; VISITOR_INFO1_LIVE=oFPXFMrLYLo";
 
   const headers: Record<string, string> = {
@@ -444,8 +464,8 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
 
   // Add SAPISIDHASH Authorization header when a real auth session is loaded.
   // This is required by YouTube for authenticated innertube API calls.
-  if (YT_COOKIES) {
-    const sapisidHash = buildSAPISIDHASH(cookieStr);
+  if (ytCookies) {
+    const sapisidHash = await buildSAPISIDHASH(cookieStr);
     if (sapisidHash) {
       headers["Authorization"] = sapisidHash;
       headers["X-Origin"] = "https://www.youtube.com";
