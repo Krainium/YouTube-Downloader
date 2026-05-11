@@ -266,6 +266,16 @@ function randomVisitorData(): string {
   return encodeURIComponent(b64.replace(/\+/g, "-").replace(/\//g, "_"));
 }
 
+// Balance-brace extract: find the end of a JSON object starting at str[0] === '{'
+function extractJsonObject(str: string): string | null {
+  let depth = 0;
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] === "{") depth++;
+    else if (str[i] === "}") { depth--; if (depth === 0) return str.slice(0, i + 1); }
+  }
+  return null;
+}
+
 async function getVisitorData(): Promise<string> {
   const now = Date.now();
   if (_cachedVisitorId && now - _cachedVisitorIdAt < VISITOR_ID_MAX_AGE_MS) {
@@ -282,15 +292,27 @@ async function getVisitorData(): Promise<string> {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
-    const SEP = "\nytcfg.set(";
-    const idx = html.indexOf(SEP);
-    if (idx === -1) throw new Error("ytcfg.set not found");
-    const fragment = html.slice(idx + SEP.length);
-    // JSON parse the first complete object
-    const parsed = JSON.parse(fragment.slice(0, fragment.indexOf("\n)")));
-    const raw: string =
-      parsed?.INNERTUBE_CONTEXT?.client?.visitorData ?? "";
-    if (!raw) throw new Error("visitorData not found in ytcfg");
+
+    // YouTube may have multiple ytcfg.set( calls; iterate until we find visitorData.
+    const SEP = "ytcfg.set(";
+    let searchFrom = 0;
+    let raw = "";
+    while (true) {
+      const idx = html.indexOf(SEP, searchFrom);
+      if (idx === -1) break;
+      const objStart = idx + SEP.length;
+      if (html[objStart] !== "{") { searchFrom = objStart; continue; }
+      const objStr = extractJsonObject(html.slice(objStart));
+      if (!objStr) { searchFrom = objStart + 1; continue; }
+      try {
+        const parsed = JSON.parse(objStr);
+        const candidate: string = parsed?.INNERTUBE_CONTEXT?.client?.visitorData ?? "";
+        if (candidate) { raw = candidate; break; }
+      } catch { /* try next */ }
+      searchFrom = objStart + 1;
+    }
+
+    if (!raw) throw new Error("visitorData not found in any ytcfg.set() block");
     _cachedVisitorId = decodeURIComponent(raw);
     _cachedVisitorIdAt = now;
     return _cachedVisitorId;
@@ -357,6 +379,8 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
       "X-Goog-Visitor-Id": visitorData,
       "Origin": "https://www.youtube.com",
       "Referer": "https://www.youtube.com/",
+      // Consent + session cookies make the request look less like an automated call.
+      "Cookie": "CONSENT=YES+cb; SOCS=CAESEwgDEgk0OTM1MDE2NzEaAmVuIAEaBgiA_LyoBg; YSC=DwKYExXM6hI; VISITOR_INFO1_LIVE=oFPXFMrLYLo",
     },
     body: JSON.stringify(body),
   });
