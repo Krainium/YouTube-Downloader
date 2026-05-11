@@ -1,20 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // In Next.js 14.1+, serverExternalPackages is top-level (not under experimental).
-  // This tells the server-side webpack to require() undici at runtime, not bundle it.
   serverExternalPackages: ["undici"],
 
   webpack: (config, { isServer, webpack }) => {
     if (!isServer) {
-      // Client build: stub out packages that must never reach the browser.
       config.resolve.fallback = {
         ...config.resolve.fallback,
         fs: false,
         path: false,
         crypto: false,
       };
-      // Also stub undici at the module level for client bundles in case
-      // webpack still picks it up through RSC analysis.
       config.plugins.push(
         new webpack.NormalModuleReplacementPlugin(
           /^undici$/,
@@ -22,8 +17,6 @@ const nextConfig = {
         )
       );
     } else {
-      // Server build: explicitly mark undici as a CommonJS external so
-      // webpack emits require('undici') instead of bundling the source.
       const existingExternals = config.externals ?? [];
       config.externals = [
         ...(Array.isArray(existingExternals)
@@ -31,11 +24,18 @@ const nextConfig = {
           : [existingExternals]),
         ({ request }, callback) => {
           if (request === "undici") return callback(null, "commonjs undici");
+          // ffmpeg packages are client-only — never bundle on server
+          if (request?.startsWith("@ffmpeg/")) return callback(null, `commonjs ${request}`);
           callback();
         },
       ];
     }
     return config;
+  },
+
+  // Allow the ffmpeg WASM binary to be served (large file, no size warning)
+  experimental: {
+    largePageDataBytes: 512 * 1024,
   },
 };
 

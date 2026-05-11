@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, lazy, Suspense } from "react";
 import type { VideoFormat, VideoInfo } from "@/lib/innertube";
 import { humanSize, mimeToExt, getCodec } from "@/lib/innertube";
+
+const MergeDownload = lazy(() => import("./MergeDownload"));
 
 interface Props {
   info: VideoInfo;
@@ -20,17 +22,14 @@ export default function FormatList({ info }: Props) {
   const [tab, setTab] = useState<Tab>("muxed");
   const [downloading, setDownloading] = useState<number | null>(null);
 
-  // Video+Audio: only truly muxed (pre-combined) formats — both audio+video in one file
   const muxedFormats = info.formats
     .filter(f => f.type === "muxed")
     .sort(byQuality);
 
-  // Video Only: adaptive video-only streams (up to 4K, no audio track)
   const videoOnlyFormats = info.formats
     .filter(f => f.type === "video")
     .sort(byQuality);
 
-  // Audio Only: adaptive audio-only streams
   const audioFormats = info.formats
     .filter(f => f.type === "audio")
     .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
@@ -89,28 +88,46 @@ export default function FormatList({ info }: Props) {
         ))}
       </div>
 
-      {/* Per-tab context notes */}
+      {/* Video+Audio tab: Smart Merge panel + pre-muxed list */}
       {tab === "muxed" && (
-        <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
-          Pre-combined files — video and audio already merged. YouTube only provides this
-          up to <span className="text-sub">360p</span>. For 1080p/4K, use{" "}
-          <button onClick={() => setTab("video")} className="text-accent hover:underline">Video Only</button>
-          {" "}+{" "}
-          <button onClick={() => setTab("audio")} className="text-accent hover:underline">Audio Only</button>
-          {" "}and combine in any video editor.
-        </p>
+        <>
+          <Suspense fallback={null}>
+            <MergeDownload
+              info={info}
+              videoFormats={videoOnlyFormats}
+              audioFormats={audioFormats}
+            />
+          </Suspense>
+
+          <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
+            Pre-combined files below — YouTube only encodes these up to{" "}
+            <span className="text-sub">360p</span>. For 720p–4K with audio use{" "}
+            <strong className="text-purple-300">Smart Merge</strong> above, or download{" "}
+            <button onClick={() => setTab("video")} className="text-accent hover:underline">Video Only</button>
+            {" "}+{" "}
+            <button onClick={() => setTab("audio")} className="text-accent hover:underline">Audio Only</button>
+            {" "}and combine in any video editor.
+          </p>
+        </>
       )}
+
       {tab === "video" && (
         <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
           Video stream only — <span className="text-yellow-400">no audio track</span>.
-          Download an <button onClick={() => setTab("audio")} className="text-accent hover:underline">Audio Only</button> file
-          separately and merge them for a complete video.
+          Use <strong className="text-purple-300">Video + Audio → Smart Merge</strong> for a ready-to-play file,
+          or download an{" "}
+          <button onClick={() => setTab("audio")} className="text-accent hover:underline">Audio Only</button>{" "}
+          file separately and merge them.
         </p>
       )}
+
       {tab === "audio" && (
         <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
           Audio stream only. Works great for music, podcasts, or as the audio track to pair
-          with a <button onClick={() => setTab("video")} className="text-accent hover:underline">Video Only</button> download.
+          with a{" "}
+          <button onClick={() => setTab("video")} className="text-accent hover:underline">Video Only</button>{" "}
+          download. For a complete video file use{" "}
+          <button onClick={() => setTab("muxed")} className="text-purple-300 hover:underline">Smart Merge</button>.
         </p>
       )}
 
