@@ -20,14 +20,17 @@ export default function FormatList({ info }: Props) {
   const [tab, setTab] = useState<Tab>("muxed");
   const [downloading, setDownloading] = useState<number | null>(null);
 
+  // Video+Audio: only truly muxed (pre-combined) formats — both audio+video in one file
   const muxedFormats = info.formats
-    .filter(f => f.type === "muxed" || f.type === "video")
+    .filter(f => f.type === "muxed")
     .sort(byQuality);
 
+  // Video Only: adaptive video-only streams (up to 4K, no audio track)
   const videoOnlyFormats = info.formats
     .filter(f => f.type === "video")
     .sort(byQuality);
 
+  // Audio Only: adaptive audio-only streams
   const audioFormats = info.formats
     .filter(f => f.type === "audio")
     .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
@@ -59,9 +62,9 @@ export default function FormatList({ info }: Props) {
   }
 
   const tabs: { id: Tab; label: string; count: number }[] = [
-    { id: "muxed",  label: "Video+Audio", count: muxedFormats.length },
-    { id: "video",  label: "Video Only",  count: videoOnlyFormats.length },
-    { id: "audio",  label: "Audio Only",  count: audioFormats.length },
+    { id: "muxed", label: "Video + Audio", count: muxedFormats.length },
+    { id: "video", label: "Video Only",    count: videoOnlyFormats.length },
+    { id: "audio", label: "Audio Only",    count: audioFormats.length },
   ];
 
   return (
@@ -86,11 +89,28 @@ export default function FormatList({ info }: Props) {
         ))}
       </div>
 
-      {/* Note for Video+Audio tab */}
+      {/* Per-tab context notes */}
       {tab === "muxed" && (
-        <p className="text-xs text-muted mb-3 px-1">
-          Formats tagged <span className="text-green-400">+audio</span> include both video &amp; audio in one file.
-          Higher resolutions are video-only — download an Audio track separately to combine.
+        <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
+          Pre-combined files — video and audio already merged. YouTube only provides this
+          up to <span className="text-sub">360p</span>. For 1080p/4K, use{" "}
+          <button onClick={() => setTab("video")} className="text-accent hover:underline">Video Only</button>
+          {" "}+{" "}
+          <button onClick={() => setTab("audio")} className="text-accent hover:underline">Audio Only</button>
+          {" "}and combine in any video editor.
+        </p>
+      )}
+      {tab === "video" && (
+        <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
+          Video stream only — <span className="text-yellow-400">no audio track</span>.
+          Download an <button onClick={() => setTab("audio")} className="text-accent hover:underline">Audio Only</button> file
+          separately and merge them for a complete video.
+        </p>
+      )}
+      {tab === "audio" && (
+        <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
+          Audio stream only. Works great for music, podcasts, or as the audio track to pair
+          with a <button onClick={() => setTab("video")} className="text-accent hover:underline">Video Only</button> download.
         </p>
       )}
 
@@ -119,15 +139,21 @@ export default function FormatList({ info }: Props) {
                   {fmt.fps && fmt.fps > 0 && (
                     <span className="text-xs text-muted">{fmt.fps}fps</span>
                   )}
-                  {fmt.type === "muxed" ? (
+                  {fmt.type === "muxed" && (
                     <span className="text-xs bg-green-500/10 text-green-400 border border-green-500/20 rounded px-1.5 py-0.5">
                       +audio
                     </span>
-                  ) : fmt.type === "video" && tab === "muxed" ? (
+                  )}
+                  {fmt.type === "video" && (
                     <span className="text-xs bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 rounded px-1.5 py-0.5">
                       video only
                     </span>
-                  ) : null}
+                  )}
+                  {fmt.type === "audio" && (
+                    <span className="text-xs bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded px-1.5 py-0.5">
+                      audio only
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3 mt-1">
                   {size && <span className="text-xs text-sub font-mono">{size}</span>}

@@ -128,11 +128,14 @@ export interface VideoInfo {
   videoId: string;
   title: string;
   author: string;
+  channelId?: string;
   lengthSeconds: string;
   viewCount: string;
   thumbnail: string;
   description: string;
   publishDate?: string;
+  subscriberCount?: string;
+  commentCount?: string;
   formats: VideoFormat[];
   /** true when CDN URLs are bound to the proxy IP; stream route must also proxy */
   proxied?: boolean;
@@ -589,6 +592,7 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient, useProx
 
   const details = data?.videoDetails || {};
   const streaming = data?.streamingData || {};
+  const microformat = data?.microformat?.playerMicroformatRenderer || {};
   const thumb = details?.thumbnail?.thumbnails;
   const thumbnailUrl = thumb
     ? thumb[thumb.length - 1]?.url
@@ -597,13 +601,122 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient, useProx
   return {
     videoId,
     title: details.title || "Unknown Title",
-    author: details.author || "Unknown",
-    lengthSeconds: details.lengthSeconds || "0",
-    viewCount: details.viewCount || "0",
+    author: details.author || (microformat.ownerChannelName as string) || "Unknown",
+    channelId: (details.channelId as string) || (microformat.externalChannelId as string) || undefined,
+    lengthSeconds: details.lengthSeconds || (microformat.lengthSeconds as string) || "0",
+    viewCount: (details.viewCount as string) || (microformat.viewCount as string) || "0",
     thumbnail: thumbnailUrl,
+    publishDate: (microformat.publishDate as string) || undefined,
     description: ((details.shortDescription as string) || "").slice(0, 200),
     formats: parseFormats(streaming),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Subscriber count — fetched via the browse API using the channel's ID.
+// Returns YouTube's pre-formatted string e.g. "10.2M subscribers".
+// Non-blocking: any failure silently returns undefined.
+// ---------------------------------------------------------------------------
+async function fetchSubscriberCount(channelId: string, useProxy: boolean): Promise<string | undefined> {
+  try {
+    const apiUrl = `https://www.youtube.com/youtubei/v1/browse?key=${ANDROID_CLIENT.apiKey}&prettyPrint=false`;
+    const body = {
+      browseId: channelId,
+      context: {
+        client: {
+          clientName: "ANDROID",
+          clientVersion: ANDROID_CLIENT.clientVersion,
+          hl: "en",
+          gl: "US",
+        },
+      },
+    };
+    const fetchFn = useProxy ? await getProxyFetch() : fetch;
+    const res = await fetchFn(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": ANDROID_CLIENT.userAgent,
+        "X-YouTube-Client-Name": ANDROID_CLIENT.clientId,
+        "X-YouTube-Client-Version": ANDROID_CLIENT.clientVersion,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    const h = data?.header;
+    // c4TabbedHeaderRenderer (standard channel page)
+    const subText: string | undefined =
+      h?.c4TabbedHeaderRenderer?.subscriberCountText?.simpleText ||
+      h?.c4TabbedHeaderRenderer?.subscriberCountText?.runs?.[0]?.text ||
+      // pageHeaderRenderer (newer channel layout)
+      h?.pageHeaderRenderer?.content?.pageHeaderViewModel?.metadata
+        ?.contentMetadataViewModel?.metadataRows?.[1]?.metadataParts?.[0]?.text?.content ||
+      h?.pageHeaderRenderer?.content?.pageHeaderViewModel?.metadata
+        ?.contentMetadataViewModel?.metadataRows?.[0]?.metadataParts?.[0]?.text?.content;
+    return subText || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Comment count — fetched via the next API (same endpoint the web player uses).
+// Returns YouTube's pre-formatted string e.g. "12K" or "1,234,567".
+// Non-blocking: any failure silently returns undefined.
+// ---------------------------------------------------------------------------
+async function fetchCommentCount(videoId: string, useProxy: boolean): Promise<string | undefined> {
+  try {
+    const apiUrl = `https://www.youtube.com/youtubei/v1/next?key=${WEB_CLIENT.apiKey}&prettyPrint=false`;
+    const body = {
+      videoId,
+      context: {
+        client: {
+          clientName: "WEB",
+          clientVersion: WEB_CLIENT.clientVersion,
+          hl: "en",
+          gl: "US",
+          platform: "DESKTOP",
+          browserName: "Chrome",
+          browserVersion: "148.0.7778.96",
+        },
+      },
+    };
+    const fetchFn = useProxy ? await getProxyFetch() : fetch;
+    const res = await fetchFn(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": WEB_CLIENT.userAgent,
+        "X-YouTube-Client-Name": WEB_CLIENT.clientId,
+        "X-YouTube-Client-Version": WEB_CLIENT.clientVersion,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    // Comments count lives in the engagement panels header
+    const panels: unknown[] = data?.engagementPanels || [];
+    for (const panel of panels) {
+      const p = panel as Record<string, unknown>;
+      const renderer = (p?.engagementPanelSectionListRenderer as Record<string, unknown>);
+      const header = (renderer?.header as Record<string, unknown>)
+        ?.engagementPanelTitleHeaderRenderer as Record<string, unknown> | undefined;
+      if (!header) continue;
+      const titleText: string =
+        (header?.title as Record<string, unknown[]>)?.runs?.[0]
+          ? ((header.title as Record<string, unknown[]>).runs[0] as Record<string, string>).text
+          : (header?.title as Record<string, string>)?.simpleText || "";
+      if (titleText === "Comments") {
+        const count: string | undefined =
+          ((header?.contextualInfo as Record<string, unknown[]>)?.runs?.[0] as Record<string, string> | undefined)?.text;
+        if (count) return count;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function shouldTryNext(msg: string): boolean {
@@ -645,6 +758,8 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   ];
 
   let lastErr: Error | null = null;
+  let coreInfo: Omit<VideoInfo, "proxied"> | null = null;
+  let usedProxy = false;
 
   // ── Phase 1: Direct fetch (no proxy) ─────────────────────────────────────
   // CDN URLs will be bound to Vercel's IP, so the stream route can proxy from
@@ -652,7 +767,7 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   for (const client of directClients) {
     try {
       const info = await fetchViaInnertube(videoId, client, false);
-      if (info.formats.length > 0) return { ...info, proxied: false };
+      if (info.formats.length > 0) { coreInfo = info; usedProxy = false; break; }
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       lastErr = e;
@@ -661,13 +776,11 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   }
 
   // ── Phase 2: Proxy fetch (restricted / label-blocked content) ────────────
-  // CDN URLs will be bound to the proxy IP. The stream route detects this via
-  // the `proxied=1` flag and routes its CDN fetch through the same proxy.
-  if (process.env.PROXY_URL) {
+  if (!coreInfo && process.env.PROXY_URL) {
     for (const client of proxyClients) {
       try {
         const info = await fetchViaInnertube(videoId, client, true);
-        if (info.formats.length > 0) return { ...info, proxied: true };
+        if (info.formats.length > 0) { coreInfo = info; usedProxy = true; break; }
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         lastErr = e;
@@ -677,15 +790,32 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   }
 
   // ── Phase 3: Page-scrape fallback ────────────────────────────────────────
-  for (const useProxy of [false, true]) {
-    if (useProxy && !process.env.PROXY_URL) continue;
-    try {
-      const info = await fetchViaPageScrape(videoId, useProxy);
-      if (info.formats.length > 0) return { ...info, proxied: useProxy };
-    } catch { /* try next */ }
+  if (!coreInfo) {
+    for (const useProxy of [false, true]) {
+      if (useProxy && !process.env.PROXY_URL) continue;
+      try {
+        const info = await fetchViaPageScrape(videoId, useProxy);
+        if (info.formats.length > 0) { coreInfo = info; usedProxy = useProxy; break; }
+      } catch { /* try next */ }
+    }
   }
 
-  throw lastErr || new Error("No downloadable formats found");
+  if (!coreInfo) throw lastErr || new Error("No downloadable formats found");
+
+  // ── Phase 4: Enrich with subscriber count + comment count (parallel) ─────
+  // Both calls are non-blocking — failures return undefined silently.
+  const channelId = coreInfo.channelId;
+  const [subscriberCount, commentCount] = await Promise.all([
+    channelId ? fetchSubscriberCount(channelId, usedProxy) : Promise.resolve(undefined),
+    fetchCommentCount(videoId, usedProxy),
+  ]);
+
+  return {
+    ...coreInfo,
+    subscriberCount,
+    commentCount,
+    proxied: usedProxy,
+  };
 }
 
 export function humanSize(bytes: number): string {
