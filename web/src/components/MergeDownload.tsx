@@ -39,23 +39,24 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
 
     try {
       const { FFmpeg } = await import("@ffmpeg/ffmpeg");
-      const { fetchFile, toBlobURL } = await import("@ffmpeg/util");
+      const { fetchFile } = await import("@ffmpeg/util");
 
       if (!ffmpegRef.current) {
         const ffmpeg = new FFmpeg();
         ffmpeg.on("progress", ({ progress: p }: { progress: number }) => {
           setProgress(Math.min(99, Math.round(p * 100)));
         });
-        ffmpeg.on("log", ({ message }: { message: string }) => {
-          if (message.includes("time=")) setStatusMsg("Muxing streams...");
+
+        setStatusMsg("Loading ffmpeg engine (cached after first use)...");
+
+        // Serve ffmpeg core from our own origin — avoids CSP blob: restrictions
+        // and cross-origin Worker issues entirely.
+        const origin = typeof window !== "undefined" ? window.location.origin : "";
+        await ffmpeg.load({
+          coreURL: `${origin}/api/ffmpeg-core?file=ffmpeg-core.js`,
+          wasmURL: `${origin}/api/ffmpeg-core?file=ffmpeg-core.wasm`,
         });
 
-        setStatusMsg("Downloading ffmpeg engine (~31 MB, cached after first use)...");
-        const baseUrl = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
-        await ffmpeg.load({
-          coreURL: await toBlobURL(`${baseUrl}/ffmpeg-core.js`, "text/javascript"),
-          wasmURL: await toBlobURL(`${baseUrl}/ffmpeg-core.wasm`, "application/wasm"),
-        });
         ffmpegRef.current = ffmpeg;
       }
 
@@ -80,7 +81,7 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
       await ffmpeg.writeFile("audio.m4a", await fetchFile(audioProxy));
 
       setPhase("merging");
-      setStatusMsg("Muxing video + audio (stream copy)...");
+      setStatusMsg("Muxing streams...");
       await ffmpeg.exec([
         "-i", "video.mp4",
         "-i", "audio.m4a",
@@ -142,10 +143,10 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
       </div>
 
       <p className="text-xs text-muted mb-3 leading-relaxed">
-        Get full-quality video with audio — up to{" "}
+        Full-quality video with audio — up to{" "}
         <span className="text-purple-300">
           {videoFormats[0]?.qualityLabel ?? videoFormats[0]?.quality ?? "4K"}
-        </span>. No uploads, no server processing.
+        </span>.
       </p>
 
       <div className="flex gap-2 items-center flex-wrap">

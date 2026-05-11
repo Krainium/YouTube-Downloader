@@ -99,13 +99,7 @@ export default function FormatList({ info }: Props) {
           />
 
           <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
-            Pre-combined files below — YouTube only encodes these up to{" "}
-            <span className="text-sub">360p</span>. For 720p–4K with audio use{" "}
-            <strong className="text-purple-300">Smart Merge</strong> above, or download{" "}
-            <button onClick={() => setTab("video")} className="text-accent hover:underline">Video Only</button>
-            {" "}+{" "}
-            <button onClick={() => setTab("audio")} className="text-accent hover:underline">Audio Only</button>
-            {" "}and combine in any video editor.
+            Or grab a pre-combined file below (up to <span className="text-sub">360p</span>).
           </p>
         </>
       )}
