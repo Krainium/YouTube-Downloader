@@ -1,3 +1,42 @@
+import { createHash } from "crypto";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+
+// ---------------------------------------------------------------------------
+// YouTube auth cookie loading.
+// Priority: YOUTUBE_COOKIES env var > cookies.txt file in project root.
+// The cookie string is the raw "Cookie" header value from an authenticated
+// browser session on youtube.com (copy from DevTools > Network > any request).
+// ---------------------------------------------------------------------------
+function loadYtCookies(): string {
+  if (process.env.YOUTUBE_COOKIES) return process.env.YOUTUBE_COOKIES.trim();
+  try {
+    const p = join(process.cwd(), "cookies.txt");
+    if (existsSync(p)) {
+      const raw = readFileSync(p, "utf-8").trim();
+      if (raw && !raw.startsWith("PASTE_")) return raw;
+    }
+  } catch { /* ignore */ }
+  return "";
+}
+
+// Cached once per cold start — cookies don't change mid-session.
+const YT_COOKIES = loadYtCookies();
+
+// Generate SAPISIDHASH Authorization header from SAPISID cookie value.
+// YouTube requires this for authenticated innertube API calls.
+// Format: SAPISIDHASH {timestamp}_{SHA1("{timestamp} {SAPISID} https://www.youtube.com")}
+function buildSAPISIDHASH(cookieStr: string): string | null {
+  const m = cookieStr.match(/(?:^|;\s*)SAPISID=([^;]+)/);
+  if (!m) return null;
+  const sapisid = m[1].trim();
+  const ts = Math.floor(Date.now() / 1000);
+  const hash = createHash("sha1")
+    .update(`${ts} ${sapisid} https://www.youtube.com`)
+    .digest("hex");
+  return `SAPISIDHASH ${ts}_${hash}`;
+}
+
 export interface VideoFormat {
   itag: number;
   mimeType: string;
@@ -387,20 +426,36 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
     contentCheckOk: true,
   };
 
+  // Use real auth cookies when available, otherwise fall back to static consent cookies.
+  const cookieStr = YT_COOKIES ||
+    "CONSENT=YES+cb; SOCS=CAESEwgDEgk0OTM1MDE2NzEaAmVuIAEaBgiA_LyoBg; YSC=DwKYExXM6hI; VISITOR_INFO1_LIVE=oFPXFMrLYLo";
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "User-Agent": client.userAgent,
+    "X-YouTube-Client-Name": client.clientId,
+    "X-YouTube-Client-Version": client.clientVersion,
+    "X-Goog-Visitor-Id": visitorData,
+    "Origin": "https://www.youtube.com",
+    "Referer": "https://www.youtube.com/",
+    "Cookie": cookieStr,
+  };
+
+  // Add SAPISIDHASH Authorization header when a real auth session is loaded.
+  // This is required by YouTube for authenticated innertube API calls.
+  if (YT_COOKIES) {
+    const sapisidHash = buildSAPISIDHASH(cookieStr);
+    if (sapisidHash) {
+      headers["Authorization"] = sapisidHash;
+      headers["X-Origin"] = "https://www.youtube.com";
+      headers["X-Goog-AuthUser"] = "0";
+    }
+  }
+
   const res = await fetch(apiUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "User-Agent": client.userAgent,
-      "X-YouTube-Client-Name": client.clientId,
-      "X-YouTube-Client-Version": client.clientVersion,
-      "X-Goog-Visitor-Id": visitorData,
-      "Origin": "https://www.youtube.com",
-      "Referer": "https://www.youtube.com/",
-      // Consent + session cookies make the request look less like an automated call.
-      "Cookie": "CONSENT=YES+cb; SOCS=CAESEwgDEgk0OTM1MDE2NzEaAmVuIAEaBgiA_LyoBg; YSC=DwKYExXM6hI; VISITOR_INFO1_LIVE=oFPXFMrLYLo",
-    },
+    headers,
     body: JSON.stringify(body),
   });
 
