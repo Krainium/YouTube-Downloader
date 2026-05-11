@@ -182,7 +182,7 @@ const ANDROID_CLIENT = {
   clientId: "3",
 };
 
-// ANDROID_EMBEDDED: also sdkless, no androidSdkVersion.
+// ANDROID_EMBEDDED: also sdkless. embedUrl triggers thirdParty context in the request.
 const ANDROID_EMBEDDED_CLIENT = {
   clientName: "ANDROID_EMBEDDED_PLAYER",
   clientVersion: "20.10.38",
@@ -190,6 +190,19 @@ const ANDROID_EMBEDDED_CLIENT = {
     "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
   apiKey: "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
   clientId: "55",
+  embedUrl: "https://www.youtube.com/",
+};
+
+// TV_EMBEDDED: Tizen smart-TV embedded player. Often bypasses label-level
+// restrictions that affect Android/iOS clients from datacenter IPs.
+const TV_EMBEDDED_CLIENT = {
+  clientName: "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+  clientVersion: "2.0",
+  userAgent:
+    "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1",
+  apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+  clientId: "85",
+  embedUrl: "https://www.youtube.com/",
 };
 
 const IOS_CLIENT = {
@@ -326,6 +339,7 @@ type YoutubeClient = {
   clientName: string;
   clientVersion: string;
   deviceModel?: string;
+  embedUrl?: string;
   userAgent: string;
   apiKey: string;
   clientId: string;
@@ -354,11 +368,16 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
     clientContext.deviceModel = client.deviceModel;
   }
 
+  // thirdParty context is used by embedded/TV clients to indicate the embed origin.
+  // It helps bypass label-level restrictions on certain videos.
+  const contextObj: Record<string, unknown> = { client: clientContext };
+  if (client.embedUrl) {
+    contextObj.thirdParty = { embedUrl: client.embedUrl };
+  }
+
   const body = {
     videoId,
-    context: {
-      client: clientContext,
-    },
+    context: contextObj,
     playbackContext: {
       contentPlaybackContext: {
         html5Preference: "HTML5_PREF_WANTS",
@@ -433,7 +452,7 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   const videoId = extractVideoId(urlOrId) || urlOrId;
   if (!videoId || videoId.length < 8) throw new Error("Invalid YouTube URL or video ID");
 
-  const clients = [ANDROID_VR_CLIENT, ANDROID_CLIENT, ANDROID_EMBEDDED_CLIENT, IOS_CLIENT];
+  const clients = [ANDROID_VR_CLIENT, ANDROID_CLIENT, ANDROID_EMBEDDED_CLIENT, TV_EMBEDDED_CLIENT, IOS_CLIENT];
   let lastErr: Error | null = null;
 
   for (const client of clients) {
