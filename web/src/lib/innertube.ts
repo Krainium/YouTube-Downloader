@@ -290,16 +290,25 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   const videoId = extractVideoId(urlOrId) || urlOrId;
   if (!videoId || videoId.length < 8) throw new Error("Invalid YouTube URL or video ID");
 
+  let innertubeErr: Error | null = null;
+
+  try {
+    const info = await fetchViaInnertube(videoId);
+    if (info.formats.length > 0) return info;
+  } catch (err) {
+    innertubeErr = err instanceof Error ? err : new Error(String(err));
+    const isBotDetected = innertubeErr.message.toLowerCase().includes("sign in") ||
+      innertubeErr.message.toLowerCase().includes("login") ||
+      innertubeErr.message.toLowerCase().includes("bot");
+    if (!isBotDetected) throw innertubeErr;
+  }
+
   try {
     const info = await fetchViaPageScrape(videoId);
     if (info.formats.length > 0) return info;
-    throw new Error("No formats from page scrape");
+    throw innertubeErr || new Error("No downloadable formats found");
   } catch (scrapeErr) {
-    try {
-      return await fetchViaInnertube(videoId);
-    } catch {
-      throw scrapeErr;
-    }
+    throw innertubeErr || scrapeErr;
   }
 }
 
