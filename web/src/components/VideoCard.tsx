@@ -20,8 +20,18 @@ function formatPublishDate(raw: string | undefined): string | null {
 
 export default function VideoCard({ info }: Props) {
   const duration = humanDuration(parseInt(info.lengthSeconds || "0"));
-  const views = humanViews(parseInt(info.viewCount || "0"));
-  const publishDate = formatPublishDate(info.publishDate);
+  // viewCount may be a pre-formatted string ("6,570 views") or a raw number.
+  const rawVC = info.viewCount || "0";
+  const views = /\D/.test(rawVC)
+    ? rawVC                                          // already formatted by next API
+    : humanViews(parseInt(rawVC)) + " views";        // format raw numeric fallback
+  // publishDate from next API is already human-readable ("May 10, 2026").
+  // Fall back to ISO date formatting if it looks like "YYYY-MM-DD".
+  const publishDate = info.publishDate
+    ? (/^\d{4}-\d{2}-\d{2}/.test(info.publishDate)
+        ? formatPublishDate(info.publishDate)
+        : info.publishDate)
+    : null;
 
   return (
     <div className="gradient-border p-5 animate-slide-up">

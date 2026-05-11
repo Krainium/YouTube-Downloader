@@ -613,59 +613,18 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient, useProx
 }
 
 // ---------------------------------------------------------------------------
-// Subscriber count — fetched via the browse API using the channel's ID.
-// Returns YouTube's pre-formatted string e.g. "10.2M subscribers".
-// Non-blocking: any failure silently returns undefined.
+// Enrichment data — a single "next" API call returns viewCount, publishDate,
+// subscriberCount, and commentCount, which the player API (ANDROID client)
+// does not include. Non-blocking: any failure returns empty object silently.
 // ---------------------------------------------------------------------------
-async function fetchSubscriberCount(channelId: string, useProxy: boolean): Promise<string | undefined> {
-  try {
-    const apiUrl = `https://www.youtube.com/youtubei/v1/browse?key=${ANDROID_CLIENT.apiKey}&prettyPrint=false`;
-    const body = {
-      browseId: channelId,
-      context: {
-        client: {
-          clientName: "ANDROID",
-          clientVersion: ANDROID_CLIENT.clientVersion,
-          hl: "en",
-          gl: "US",
-        },
-      },
-    };
-    const fetchFn = useProxy ? await getProxyFetch() : fetch;
-    const res = await fetchFn(apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": ANDROID_CLIENT.userAgent,
-        "X-YouTube-Client-Name": ANDROID_CLIENT.clientId,
-        "X-YouTube-Client-Version": ANDROID_CLIENT.clientVersion,
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) return undefined;
-    const data = await res.json();
-    const h = data?.header;
-    // c4TabbedHeaderRenderer (standard channel page)
-    const subText: string | undefined =
-      h?.c4TabbedHeaderRenderer?.subscriberCountText?.simpleText ||
-      h?.c4TabbedHeaderRenderer?.subscriberCountText?.runs?.[0]?.text ||
-      // pageHeaderRenderer (newer channel layout)
-      h?.pageHeaderRenderer?.content?.pageHeaderViewModel?.metadata
-        ?.contentMetadataViewModel?.metadataRows?.[1]?.metadataParts?.[0]?.text?.content ||
-      h?.pageHeaderRenderer?.content?.pageHeaderViewModel?.metadata
-        ?.contentMetadataViewModel?.metadataRows?.[0]?.metadataParts?.[0]?.text?.content;
-    return subText || undefined;
-  } catch {
-    return undefined;
-  }
+interface NextEnrichment {
+  viewCount?: string;
+  publishDate?: string;
+  subscriberCount?: string;
+  commentCount?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Comment count — fetched via the next API (same endpoint the web player uses).
-// Returns YouTube's pre-formatted string e.g. "12K" or "1,234,567".
-// Non-blocking: any failure silently returns undefined.
-// ---------------------------------------------------------------------------
-async function fetchCommentCount(videoId: string, useProxy: boolean): Promise<string | undefined> {
+async function fetchNextData(videoId: string, useProxy: boolean): Promise<NextEnrichment> {
   try {
     const apiUrl = `https://www.youtube.com/youtubei/v1/next?key=${WEB_CLIENT.apiKey}&prettyPrint=false`;
     const body = {
@@ -693,29 +652,75 @@ async function fetchCommentCount(videoId: string, useProxy: boolean): Promise<st
       },
       body: JSON.stringify(body),
     });
-    if (!res.ok) return undefined;
+    if (!res.ok) return {};
     const data = await res.json();
-    // Comments count lives in the engagement panels header
-    const panels: unknown[] = data?.engagementPanels || [];
-    for (const panel of panels) {
-      const p = panel as Record<string, unknown>;
-      const renderer = (p?.engagementPanelSectionListRenderer as Record<string, unknown>);
-      const header = (renderer?.header as Record<string, unknown>)
-        ?.engagementPanelTitleHeaderRenderer as Record<string, unknown> | undefined;
-      if (!header) continue;
-      const titleText: string =
-        (header?.title as Record<string, unknown[]>)?.runs?.[0]
-          ? ((header.title as Record<string, unknown[]>).runs[0] as Record<string, string>).text
-          : (header?.title as Record<string, string>)?.simpleText || "";
-      if (titleText === "Comments") {
-        const count: string | undefined =
-          ((header?.contextualInfo as Record<string, unknown[]>)?.runs?.[0] as Record<string, string> | undefined)?.text;
-        if (count) return count;
+
+    const result: NextEnrichment = {};
+
+    // ── Primary + secondary info ─────────────────────────────────────────────
+    try {
+      const contents: unknown[] =
+        (data as Record<string, unknown>)?.contents
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ?.twoColumnWatchNextResults?.results?.results?.contents || [];
+
+      for (const c of contents) {
+        const item = c as Record<string, unknown>;
+
+        // videoPrimaryInfoRenderer → viewCount + dateText
+        if (item.videoPrimaryInfoRenderer) {
+          const primary = item.videoPrimaryInfoRenderer as Record<string, unknown>;
+          const vcr = (primary?.viewCount as Record<string, unknown>)
+            ?.videoViewCountRenderer as Record<string, unknown> | undefined;
+          const vcSimple = (vcr?.viewCount as Record<string, string>)?.simpleText;
+          if (vcSimple) result.viewCount = vcSimple; // e.g. "6,570 views"
+
+          const dateSimple = (primary?.dateText as Record<string, string>)?.simpleText;
+          if (dateSimple) result.publishDate = dateSimple; // e.g. "May 10, 2026"
+        }
+
+        // videoSecondaryInfoRenderer → subscriberCountText
+        if (item.videoSecondaryInfoRenderer) {
+          const secondary = item.videoSecondaryInfoRenderer as Record<string, unknown>;
+          const owner = (secondary?.owner as Record<string, unknown>)
+            ?.videoOwnerRenderer as Record<string, unknown> | undefined;
+          const subObj = owner?.subscriberCountText as Record<string, unknown> | undefined;
+          const subText: string =
+            (subObj?.simpleText as string) ||
+            ((subObj?.runs as Array<Record<string, string>>)?.[0]?.text) || "";
+          if (subText) result.subscriberCount = subText; // e.g. "14.4K subscribers"
+        }
       }
-    }
-    return undefined;
+    } catch { /* skip */ }
+
+    // ── Comment count from engagement panels ─────────────────────────────────
+    try {
+      const panels: unknown[] = (data as Record<string, unknown>)?.engagementPanels || [];
+      for (const panel of panels) {
+        const renderer = (panel as Record<string, unknown>)
+          ?.engagementPanelSectionListRenderer as Record<string, unknown> | undefined;
+        const header = (renderer?.header as Record<string, unknown>)
+          ?.engagementPanelTitleHeaderRenderer as Record<string, unknown> | undefined;
+        if (!header) continue;
+        const titleRuns = (header?.title as Record<string, unknown[]>)?.runs;
+        const titleSimple = (header?.title as Record<string, string>)?.simpleText;
+        const title: string = titleRuns?.[0]
+          ? (titleRuns[0] as Record<string, string>).text
+          : titleSimple || "";
+        if (title === "Comments") {
+          const ctxRuns = (header?.contextualInfo as Record<string, unknown[]>)?.runs;
+          const count = ctxRuns?.[0]
+            ? (ctxRuns[0] as Record<string, string>).text
+            : undefined;
+          if (count) result.commentCount = count; // e.g. "14" or "1.2K"
+          break;
+        }
+      }
+    } catch { /* skip */ }
+
+    return result;
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -802,18 +807,17 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
 
   if (!coreInfo) throw lastErr || new Error("No downloadable formats found");
 
-  // ── Phase 4: Enrich with subscriber count + comment count (parallel) ─────
-  // Both calls are non-blocking — failures return undefined silently.
-  const channelId = coreInfo.channelId;
-  const [subscriberCount, commentCount] = await Promise.all([
-    channelId ? fetchSubscriberCount(channelId, usedProxy) : Promise.resolve(undefined),
-    fetchCommentCount(videoId, usedProxy),
-  ]);
+  // ── Phase 4: Enrich with viewCount, publishDate, subscribers, comments ────
+  // Single "next" API call — non-blocking, failures return empty object.
+  const enrichment = await fetchNextData(videoId, usedProxy);
 
   return {
     ...coreInfo,
-    subscriberCount,
-    commentCount,
+    // next API gives human-formatted strings; fall back to raw numeric value.
+    viewCount: enrichment.viewCount || coreInfo.viewCount,
+    publishDate: enrichment.publishDate || coreInfo.publishDate,
+    subscriberCount: enrichment.subscriberCount,
+    commentCount: enrichment.commentCount,
     proxied: usedProxy,
   };
 }
