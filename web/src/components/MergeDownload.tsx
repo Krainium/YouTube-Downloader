@@ -18,41 +18,92 @@ type Phase =
   | "done"
   | "error";
 
-// Fetch a URL and return its bytes — replaces @ffmpeg/util fetchFile
-async function fetchBytes(url: string): Promise<Uint8Array> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching stream`);
-  return new Uint8Array(await res.arrayBuffer());
+// ── Minimal Worker client ──────────────────────────────────────────────────
+// Talks directly to /public/ffmpeg-worker.js (plain classic Worker, no webpack).
+// No @ffmpeg/ffmpeg package involved — avoids all webpack/CSP/blob-URL issues.
+
+interface WorkerReply {
+  id?: string;
+  ok?: boolean;
+  data?: unknown;
+  error?: string;
+  type?: string;   // "progress" | "log"
+  ratio?: number;
 }
 
-// Load the UMD build of @ffmpeg/ffmpeg via a plain <script> tag.
-// This completely bypasses Next.js webpack so no Worker bundling issues occur.
-// The UMD build auto-loads its worker chunk from the same directory (/814.ffmpeg.js).
-async function loadFFmpegUMD(): Promise<unknown> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const win = window as any;
-  if (!win.FFmpegWASM) {
-    await new Promise<void>((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = "/ffmpeg.js";
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error("Failed to load /ffmpeg.js"));
-      document.head.appendChild(s);
+class FFWorker {
+  private w: Worker;
+  private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  onProgress?: (ratio: number) => void;
+
+  constructor() {
+    this.w = new Worker("/ffmpeg-worker.js");
+    this.w.onmessage = (evt: MessageEvent<WorkerReply>) => {
+      const msg = evt.data;
+      if (msg.type === "progress") {
+        this.onProgress?.(msg.ratio ?? 0);
+        return;
+      }
+      if (msg.type === "log") return; // ignore logs
+      if (msg.id) {
+        const p = this.pending.get(msg.id);
+        if (!p) return;
+        this.pending.delete(msg.id);
+        if (msg.ok) p.resolve(msg.data);
+        else p.reject(new Error(msg.error ?? "worker error"));
+      }
+    };
+  }
+
+  private send(type: string, data: unknown, transfers: Transferable[] = []): Promise<unknown> {
+    const id = Math.random().toString(36).slice(2) + Date.now();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.w.postMessage({ id, type, data }, transfers);
     });
   }
-  return win.FFmpegWASM;
+
+  async load(coreURL: string, wasmURL: string)           { await this.send("load",   { coreURL, wasmURL }); }
+  async exec(args: string[])                              { await this.send("exec",   { args }); }
+  async write(path: string, data: Uint8Array)             { await this.send("write",  { path, data }, [data.buffer]); }
+  async read(path: string): Promise<Uint8Array>           { return this.send("read",  { path }) as Promise<Uint8Array>; }
+  async del(path: string)                                 { await this.send("delete", { path }).catch(() => {}); }
+  terminate()                                             { this.w.terminate(); }
 }
 
+// ── Simple byte fetcher ────────────────────────────────────────────────────
+async function fetchBytes(url: string, onProgress?: (pct: number) => void): Promise<Uint8Array> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
+
+  const total = parseInt(res.headers.get("content-length") ?? "0", 10);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total > 0) onProgress?.(received / total);
+  }
+  const out = new Uint8Array(received);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.length; }
+  return out;
+}
+
+// ── Component ──────────────────────────────────────────────────────────────
 export default function MergeDownload({ info, videoFormats, audioFormats }: Props) {
   const [selectedItag, setSelectedItag] = useState<number>(videoFormats[0]?.itag ?? 0);
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [progress, setProgress] = useState(0);
-  const [statusMsg, setStatusMsg] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ffmpegRef = useRef<any>(null);
+  const [phase, setPhase]               = useState<Phase>("idle");
+  const [progress, setProgress]         = useState(0);
+  const [statusMsg, setStatusMsg]       = useState("");
+  const [error, setError]               = useState<string | null>(null);
+  const workerRef                       = useRef<FFWorker | null>(null);
 
-  const bestAudio = audioFormats[0];
+  const bestAudio    = audioFormats[0];
   const selectedVideo = videoFormats.find(f => f.itag === selectedItag) ?? videoFormats[0];
 
   async function handleMerge() {
@@ -63,50 +114,57 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
     setStatusMsg("Loading ffmpeg engine...");
 
     try {
-      // Load UMD build — no webpack, no blob URLs, no CSP issues
-      const FFmpegWASM = await loadFFmpegUMD() as { FFmpeg: new () => unknown };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const ffmpeg: any = ffmpegRef.current ?? new FFmpegWASM.FFmpeg();
-
-      if (!ffmpeg.loaded) {
-        ffmpeg.on("progress", ({ progress: p }: { progress: number }) => {
-          setProgress(Math.min(99, Math.round(p * 100)));
-        });
-
-        setStatusMsg("Loading ffmpeg engine (cached after first use)...");
-        const origin = window.location.origin;
-        await ffmpeg.load({
-          // Proxy our own-origin URLs — worker uses importScripts() on these
-          coreURL: `${origin}/api/ffmpeg-core?file=ffmpeg-core.js`,
-          wasmURL: `${origin}/api/ffmpeg-core?file=ffmpeg-core.wasm`,
-        });
-        ffmpegRef.current = ffmpeg;
-      } else {
-        ffmpegRef.current = ffmpeg;
+      // Create worker once; reuse on subsequent calls
+      if (!workerRef.current) {
+        workerRef.current = new FFWorker();
       }
+      const ff = workerRef.current;
+      ff.onProgress = (ratio) => {
+        setProgress(Math.min(99, Math.round(ratio * 100)));
+      };
+
+      const origin  = window.location.origin;
+      const coreURL = `${origin}/api/ffmpeg-core?file=ffmpeg-core.js`;
+      const wasmURL = `${origin}/api/ffmpeg-core?file=ffmpeg-core.wasm`;
+
+      setStatusMsg("Loading ffmpeg engine (cached after first use)...");
+      await ff.load(coreURL, wasmURL);
 
       const proxied = info.proxied ? "1" : "0";
-
       const videoMB = selectedVideo.contentLength
-        ? Math.round(parseInt(selectedVideo.contentLength) / 1024 / 1024)
-        : "?";
+        ? Math.round(parseInt(selectedVideo.contentLength) / 1024 / 1024) : "?";
       const audioMB = bestAudio.contentLength
-        ? Math.round(parseInt(bestAudio.contentLength) / 1024 / 1024)
-        : "?";
+        ? Math.round(parseInt(bestAudio.contentLength) / 1024 / 1024) : "?";
 
+      // Fetch video
       setPhase("fetching-video");
-      setStatusMsg(`Fetching video stream (~${videoMB} MB)...`);
+      setStatusMsg(`Fetching video (~${videoMB} MB)...`);
       const videoProxy = `/api/stream?url=${encodeURIComponent(selectedVideo.url)}&filename=video.mp4&proxied=${proxied}`;
-      await ffmpeg.writeFile("video.mp4", await fetchBytes(videoProxy));
+      const videoBytes = await fetchBytes(videoProxy, p => {
+        setProgress(Math.round(p * 50)); // 0–50%
+        setStatusMsg(`Fetching video (~${videoMB} MB)… ${Math.round(p * 100)}%`);
+      });
 
+      // Fetch audio
       setPhase("fetching-audio");
-      setStatusMsg(`Fetching audio stream (~${audioMB} MB)...`);
+      setStatusMsg(`Fetching audio (~${audioMB} MB)...`);
       const audioProxy = `/api/stream?url=${encodeURIComponent(bestAudio.url)}&filename=audio.m4a&proxied=${proxied}`;
-      await ffmpeg.writeFile("audio.m4a", await fetchBytes(audioProxy));
+      const audioBytes = await fetchBytes(audioProxy, p => {
+        setProgress(50 + Math.round(p * 10)); // 50–60%
+        setStatusMsg(`Fetching audio (~${audioMB} MB)… ${Math.round(p * 100)}%`);
+      });
 
+      // Write to ffmpeg FS
       setPhase("merging");
-      setStatusMsg("Muxing streams...");
-      await ffmpeg.exec([
+      setStatusMsg("Writing files to ffmpeg...");
+      setProgress(62);
+      await ff.write("video.mp4", videoBytes);
+      await ff.write("audio.m4a", audioBytes);
+
+      // Mux — stream copy, very fast
+      setProgress(65);
+      setStatusMsg("Muxing streams (stream copy)...");
+      await ff.exec([
         "-i", "video.mp4",
         "-i", "audio.m4a",
         "-c:v", "copy",
@@ -116,33 +174,37 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
         "output.mp4",
       ]);
 
-      const data: Uint8Array = await ffmpeg.readFile("output.mp4");
-      const ab = new Uint8Array(data).buffer as ArrayBuffer;
-      const blob = new Blob([ab], { type: "video/mp4" });
-      const blobUrl = URL.createObjectURL(blob);
-      const safeName = info.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 60).trim();
-      const label = selectedVideo.qualityLabel ?? selectedVideo.quality ?? String(selectedVideo.itag);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = `${safeName} [${label}].mp4`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+      // Read result
+      setProgress(90);
+      setStatusMsg("Saving file...");
+      const out  = await ff.read("output.mp4");
+      const blob = new Blob([new Uint8Array(out).buffer as ArrayBuffer], { type: "video/mp4" });
+      const url  = URL.createObjectURL(blob);
+      const safe = info.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 60).trim();
+      const lbl  = selectedVideo.qualityLabel ?? selectedVideo.quality ?? String(selectedVideo.itag);
+      const a    = document.createElement("a");
+      a.href = url; a.download = `${safe} [${lbl}].mp4`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
 
-      await ffmpeg.deleteFile("video.mp4").catch(() => {});
-      await ffmpeg.deleteFile("audio.m4a").catch(() => {});
-      await ffmpeg.deleteFile("output.mp4").catch(() => {});
+      // Cleanup ffmpeg FS
+      await ff.del("video.mp4");
+      await ff.del("audio.m4a");
+      await ff.del("output.mp4");
 
       setProgress(100);
       setPhase("done");
-      setStatusMsg("Saved to your downloads folder!");
+      setStatusMsg("Saved to downloads!");
       setTimeout(() => { setPhase("idle"); setProgress(0); setStatusMsg(""); }, 4000);
+
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error("MergeDownload error:", err);
+      console.error("MergeDownload:", err);
       setError(msg);
       setPhase("error");
+      // Recreate worker on next attempt so state is clean
+      workerRef.current?.terminate();
+      workerRef.current = null;
     }
   }
 
@@ -181,12 +243,12 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
           style={{ maxWidth: 230 }}
         >
           {videoFormats.slice(0, 14).map(f => {
-            const mb = f.contentLength ? `~${Math.round(parseInt(f.contentLength) / 1024 / 1024)}MB` : "";
+            const mb  = f.contentLength ? `~${Math.round(parseInt(f.contentLength) / 1024 / 1024)}MB` : "";
             const fps = f.fps && f.fps > 30 ? ` @ ${f.fps}fps` : "";
-            const label = (f.qualityLabel ?? f.quality ?? String(f.itag)) + fps;
+            const lbl = (f.qualityLabel ?? f.quality ?? String(f.itag)) + fps;
             return (
               <option key={f.itag} value={f.itag}>
-                {label}{mb ? `  (${mb} video)` : ""}
+                {lbl}{mb ? `  (${mb} video)` : ""}
               </option>
             );
           })}
@@ -218,24 +280,19 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
               <line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
           )}
-          {isBusy
-            ? "Working..."
-            : phase === "done"
-            ? "Saved!"
+          {isBusy ? "Working..."
+            : phase === "done" ? "Saved!"
             : `Merge & Download ${qlabel}`}
         </button>
       </div>
 
       {(statusMsg || phase === "error") && (
         <div className="mt-3 space-y-1.5">
-          {(phase === "merging" || phase === "done") && (
+          {phase !== "idle" && phase !== "error" && (
             <div className="w-full bg-border rounded-full h-1.5 overflow-hidden">
               <div
-                className="h-1.5 rounded-full transition-all duration-500"
-                style={{
-                  width: `${progress}%`,
-                  background: phase === "done" ? "#22c55e" : "#7c3aed",
-                }}
+                className="h-1.5 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%`, background: phase === "done" ? "#22c55e" : "#7c3aed" }}
               />
             </div>
           )}
