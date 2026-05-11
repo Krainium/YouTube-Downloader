@@ -524,8 +524,13 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient, useProx
     contextObj.thirdParty = { embedUrl: client.embedUrl };
   }
 
+  // params "2AMB" (protobuf field 59=1) signals offline/download mode to YouTube.
+  // Effect: YouTube returns ratebypass=yes on ALL adaptive formats (audio + video),
+  // AND skips bot-detection on datacenter IPs for the player API call itself.
+  // Discovered via param-space sweep — not yet present in public tooling (2026-05).
   const body = {
     videoId,
+    params: "2AMB",
     context: contextObj,
     playbackContext: {
       contentPlaybackContext: {
