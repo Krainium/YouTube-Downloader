@@ -318,7 +318,7 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
     body: JSON.stringify(body),
   });
 
-  if (!res.ok) throw new Error(`YouTube API error: ${res.status}`);
+  if (!res.ok) throw new Error(`api error: ${res.status} (client: ${client.clientName})`);
   const data = await res.json();
 
   const status = data?.playabilityStatus?.status;
@@ -355,6 +355,7 @@ function shouldTryNext(msg: string): boolean {
     m.includes("login_required") ||
     m.includes("api error: 400") ||
     m.includes("api error: 403") ||
+    m.includes("api error: 404") ||
     m.includes("api error: 429") ||
     m.includes("unplayable") ||
     m.includes("unavailable")
