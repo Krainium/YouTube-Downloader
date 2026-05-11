@@ -100,25 +100,31 @@ async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
   if (!res.ok) throw new Error(`YouTube page fetch failed: ${res.status}`);
   const html = await res.text();
 
-  const patterns = [
-    /ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\})\s*;(?:var |<\/script>)/,
-    /ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});/,
-  ];
+  const markerIdx = html.indexOf("ytInitialPlayerResponse");
+  if (markerIdx === -1) throw new Error("Could not find player data in page");
 
-  let playerData: Record<string, unknown> | null = null;
-  for (const pat of patterns) {
-    const m = html.match(pat);
-    if (m) {
-      try {
-        playerData = JSON.parse(m[1]);
-        break;
-      } catch {
-        continue;
-      }
+  const eqIdx = html.indexOf("=", markerIdx);
+  const startIdx = html.indexOf("{", eqIdx);
+  if (startIdx === -1) throw new Error("Could not locate player JSON in page");
+
+  let depth = 0;
+  let endIdx = startIdx;
+  const limit = Math.min(startIdx + 3_000_000, html.length);
+  for (let i = startIdx; i < limit; i++) {
+    if (html[i] === "{") depth++;
+    else if (html[i] === "}") {
+      depth--;
+      if (depth === 0) { endIdx = i; break; }
     }
   }
+  if (depth !== 0) throw new Error("Malformed player JSON in page");
 
-  if (!playerData) throw new Error("Could not extract player data from page");
+  let playerData: Record<string, unknown>;
+  try {
+    playerData = JSON.parse(html.slice(startIdx, endIdx + 1));
+  } catch {
+    throw new Error("Could not parse player data from page");
+  }
 
   const ps = (playerData.playabilityStatus as Record<string, unknown>) || {};
   const status = ps.status as string;
