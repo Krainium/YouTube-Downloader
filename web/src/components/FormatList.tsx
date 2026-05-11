@@ -8,9 +8,8 @@ interface Props {
   info: VideoInfo;
 }
 
-type Tab = "video" | "audio";
+type Tab = "muxed" | "video" | "audio";
 
-// Sort by height descending (best quality first); fall back to bitrate
 function byQuality(a: VideoFormat, b: VideoFormat): number {
   const ha = a.height ?? 0, hb = b.height ?? 0;
   if (hb !== ha) return hb - ha;
@@ -18,19 +17,25 @@ function byQuality(a: VideoFormat, b: VideoFormat): number {
 }
 
 export default function FormatList({ info }: Props) {
-  const [tab, setTab] = useState<Tab>("video");
+  const [tab, setTab] = useState<Tab>("muxed");
   const [downloading, setDownloading] = useState<number | null>(null);
 
-  // Video tab = muxed (video+audio) + video-only adaptive, all sorted by quality
-  const videoFormats = info.formats
+  const muxedFormats = info.formats
     .filter(f => f.type === "muxed" || f.type === "video")
+    .sort(byQuality);
+
+  const videoOnlyFormats = info.formats
+    .filter(f => f.type === "video")
     .sort(byQuality);
 
   const audioFormats = info.formats
     .filter(f => f.type === "audio")
     .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
 
-  const current = tab === "video" ? videoFormats : audioFormats;
+  const current =
+    tab === "muxed" ? muxedFormats :
+    tab === "video" ? videoOnlyFormats :
+    audioFormats;
 
   async function handleDownload(fmt: VideoFormat) {
     if (!fmt.url) return;
@@ -39,7 +44,9 @@ export default function FormatList({ info }: Props) {
       const ext = mimeToExt(fmt.mimeType);
       const safeName = info.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 60).trim();
       const filename = `${safeName}.${ext}`;
-      const proxyUrl = `/api/stream?url=${encodeURIComponent(fmt.url)}&filename=${encodeURIComponent(filename)}`;
+      const proxied = info.proxied ? "1" : "0";
+      const proxyUrl =
+        `/api/stream?url=${encodeURIComponent(fmt.url)}&filename=${encodeURIComponent(filename)}&proxied=${proxied}`;
       const a = document.createElement("a");
       a.href = proxyUrl;
       a.download = filename;
@@ -52,8 +59,9 @@ export default function FormatList({ info }: Props) {
   }
 
   const tabs: { id: Tab; label: string; count: number }[] = [
-    { id: "video", label: "Video", count: videoFormats.length },
-    { id: "audio", label: "Audio Only", count: audioFormats.length },
+    { id: "muxed",  label: "Video+Audio", count: muxedFormats.length },
+    { id: "video",  label: "Video Only",  count: videoOnlyFormats.length },
+    { id: "audio",  label: "Audio Only",  count: audioFormats.length },
   ];
 
   return (
@@ -78,6 +86,14 @@ export default function FormatList({ info }: Props) {
         ))}
       </div>
 
+      {/* Note for Video+Audio tab */}
+      {tab === "muxed" && (
+        <p className="text-xs text-muted mb-3 px-1">
+          Formats tagged <span className="text-green-400">+audio</span> include both video &amp; audio in one file.
+          Higher resolutions are video-only — download an Audio track separately to combine.
+        </p>
+      )}
+
       {/* Format cards */}
       <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
         {current.length === 0 && (
@@ -91,29 +107,27 @@ export default function FormatList({ info }: Props) {
 
           return (
             <div key={fmt.itag} className="format-card rounded-xl p-4 bg-card flex items-center justify-between gap-4">
-              {/* Left info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  {/* Quality badge */}
                   {(fmt.qualityLabel || fmt.quality) && (
                     <span className="text-xs font-mono font-bold text-accent border border-accent/30 rounded px-1.5 py-0.5">
                       {fmt.qualityLabel || fmt.quality}
                     </span>
                   )}
-                  {/* Extension */}
                   <span className="text-xs text-gold font-mono uppercase">.{ext}</span>
-                  {/* Codec */}
                   {codec && <span className="text-xs text-muted">{codec}</span>}
-                  {/* FPS */}
                   {fmt.fps && fmt.fps > 0 && (
                     <span className="text-xs text-muted">{fmt.fps}fps</span>
                   )}
-                  {/* Muxed = has audio built in */}
-                  {fmt.type === "muxed" && (
+                  {fmt.type === "muxed" ? (
                     <span className="text-xs bg-green-500/10 text-green-400 border border-green-500/20 rounded px-1.5 py-0.5">
                       +audio
                     </span>
-                  )}
+                  ) : fmt.type === "video" && tab === "muxed" ? (
+                    <span className="text-xs bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 rounded px-1.5 py-0.5">
+                      video only
+                    </span>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-3 mt-1">
                   {size && <span className="text-xs text-sub font-mono">{size}</span>}
@@ -127,7 +141,6 @@ export default function FormatList({ info }: Props) {
                 </div>
               </div>
 
-              {/* Download button */}
               <button
                 onClick={() => handleDownload(fmt)}
                 disabled={isLoading || !fmt.url}

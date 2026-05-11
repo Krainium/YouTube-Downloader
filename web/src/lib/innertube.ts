@@ -15,6 +15,7 @@ async function getProxyFetch(): Promise<typeof fetch> {
     // webpackIgnore tells webpack to skip static analysis of this import.
     // undici is a Node.js 18+ built-in; the server loads it at runtime.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // @ts-ignore – undici resolved at runtime by Node; not in local TS paths
     const { ProxyAgent, fetch: undiciFetch } = await import(/* webpackIgnore: true */ "undici") as any;
     const agent = new ProxyAgent(proxyUrl);
     _proxyFetch = (url: RequestInfo | URL, init?: RequestInit) =>
@@ -133,16 +134,20 @@ export interface VideoInfo {
   description: string;
   publishDate?: string;
   formats: VideoFormat[];
+  /** true when CDN URLs are bound to the proxy IP; stream route must also proxy */
+  proxied?: boolean;
 }
 
 function extractVideoId(input: string): string | null {
   try {
     const url = new URL(input);
-    if (url.hostname.includes("youtu.be")) return url.pathname.slice(1).split("?")[0];
+    // youtu.be short links
+    if (url.hostname === "youtu.be") return url.pathname.slice(1).split("?")[0];
+    // youtube.com and music.youtube.com
     if (url.hostname.includes("youtube.com")) {
       const v = url.searchParams.get("v");
       if (v) return v;
-      const m = url.pathname.match(/\/(?:embed|shorts|v)\/([A-Za-z0-9_-]{11})/);
+      const m = url.pathname.match(/\/(?:embed|shorts|v|watch)\/([A-Za-z0-9_-]{11})/);
       if (m) return m[1];
     }
     return null;
@@ -227,7 +232,7 @@ function getScrapeHeaders(): Record<string, string> {
   };
 }
 
-async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
+async function fetchViaPageScrape(videoId: string, useProxy = true): Promise<Omit<VideoInfo, "proxied">> {
   const urls = [
     `https://www.youtube.com/watch?v=${videoId}&hl=en&gl=US`,
     `https://www.youtube.com/watch?v=${videoId}&hl=en&gl=US&bpctr=9999999999&has_verified=1`,
@@ -239,8 +244,8 @@ async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
 
   for (const pageUrl of urls) {
     try {
-      const proxyFetch = await getProxyFetch();
-      const res = await proxyFetch(pageUrl, { headers: getScrapeHeaders() });
+      const fetchFn = useProxy ? await getProxyFetch() : fetch;
+      const res = await fetchFn(pageUrl, { headers: getScrapeHeaders() });
       if (!res.ok) { lastError = `HTTP ${res.status} from ${pageUrl}`; continue; }
       html = await res.text();
       const data = extractPlayerData(html);
@@ -480,7 +485,7 @@ type YoutubeClient = {
   isWebClient?: true;
 };
 
-async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promise<VideoInfo> {
+async function fetchViaInnertube(videoId: string, client: YoutubeClient, useProxy = true): Promise<Omit<VideoInfo, "proxied">> {
   // Use real YouTube-issued visitor ID (technique from kkdai/youtube).
   const visitorData = await getVisitorData();
 
@@ -561,8 +566,8 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
     }
   }
 
-  const proxyFetch = await getProxyFetch();
-  const res = await proxyFetch(apiUrl, {
+  const fetchFn = useProxy ? await getProxyFetch() : fetch;
+  const res = await fetchFn(apiUrl, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -620,36 +625,29 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   const videoId = extractVideoId(urlOrId) || urlOrId;
   if (!videoId || videoId.length < 8) throw new Error("Invalid YouTube URL or video ID");
 
-  // Client order strategy:
-  // - With proxy: ANDROID first (tested OK for restricted content through ISP proxy),
-  //   then ANDROID_VR (very reliable for public content without proxy bypass needed).
-  // - Without proxy: ANDROID_VR first (sdkless, no PoToken needed, works for public).
-  // WEB_CLIENT appended only when auth cookies are present.
   const ytCookies = getYtCookies();
-  const hasProxy = !!process.env.PROXY_URL;
-  const clients = hasProxy
-    ? [
-        ANDROID_CLIENT,
-        ANDROID_VR_CLIENT,
-        IOS_CLIENT,
-        ANDROID_EMBEDDED_CLIENT,
-        TV_EMBEDDED_CLIENT,
-        ...(ytCookies ? [WEB_CLIENT] : []),
-      ]
-    : [
-        ANDROID_VR_CLIENT,
-        ANDROID_CLIENT,
-        ANDROID_EMBEDDED_CLIENT,
-        TV_EMBEDDED_CLIENT,
-        IOS_CLIENT,
-        ...(ytCookies ? [WEB_CLIENT] : []),
-      ];
+  // All clients tried in both phases. ANDROID_VR is reliable without proxy;
+  // ANDROID is proven to work for restricted content through ISP proxy.
+  const directClients = [
+    ANDROID_VR_CLIENT, ANDROID_CLIENT, IOS_CLIENT,
+    ANDROID_EMBEDDED_CLIENT, TV_EMBEDDED_CLIENT,
+    ...(ytCookies ? [WEB_CLIENT] : []),
+  ];
+  const proxyClients = [
+    ANDROID_CLIENT, ANDROID_VR_CLIENT, IOS_CLIENT,
+    ANDROID_EMBEDDED_CLIENT, TV_EMBEDDED_CLIENT,
+    ...(ytCookies ? [WEB_CLIENT] : []),
+  ];
+
   let lastErr: Error | null = null;
 
-  for (const client of clients) {
+  // ── Phase 1: Direct fetch (no proxy) ─────────────────────────────────────
+  // CDN URLs will be bound to Vercel's IP, so the stream route can proxy from
+  // the same network without needing the ISP proxy at all.
+  for (const client of directClients) {
     try {
-      const info = await fetchViaInnertube(videoId, client);
-      if (info.formats.length > 0) return info;
+      const info = await fetchViaInnertube(videoId, client, false);
+      if (info.formats.length > 0) return { ...info, proxied: false };
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       lastErr = e;
@@ -657,15 +655,32 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
     }
   }
 
-  try {
-    const info = await fetchViaPageScrape(videoId);
-    if (info.formats.length > 0) return info;
-    throw new Error("No downloadable formats found");
-  } catch (scrapeErr) {
-    const se = scrapeErr instanceof Error ? scrapeErr : new Error(String(scrapeErr));
-    if (se.message === "No downloadable formats found" && lastErr) throw lastErr;
-    throw se;
+  // ── Phase 2: Proxy fetch (restricted / label-blocked content) ────────────
+  // CDN URLs will be bound to the proxy IP. The stream route detects this via
+  // the `proxied=1` flag and routes its CDN fetch through the same proxy.
+  if (process.env.PROXY_URL) {
+    for (const client of proxyClients) {
+      try {
+        const info = await fetchViaInnertube(videoId, client, true);
+        if (info.formats.length > 0) return { ...info, proxied: true };
+      } catch (err) {
+        const e = err instanceof Error ? err : new Error(String(err));
+        lastErr = e;
+        if (!shouldTryNext(e.message)) break;
+      }
+    }
   }
+
+  // ── Phase 3: Page-scrape fallback ────────────────────────────────────────
+  for (const useProxy of [false, true]) {
+    if (useProxy && !process.env.PROXY_URL) continue;
+    try {
+      const info = await fetchViaPageScrape(videoId, useProxy);
+      if (info.formats.length > 0) return { ...info, proxied: useProxy };
+    } catch { /* try next */ }
+  }
+
+  throw lastErr || new Error("No downloadable formats found");
 }
 
 export function humanSize(bytes: number): string {
