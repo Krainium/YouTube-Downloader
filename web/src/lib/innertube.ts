@@ -695,7 +695,9 @@ async function fetchNextData(videoId: string, useProxy: boolean): Promise<NextEn
 
     // ── Comment count from engagement panels ─────────────────────────────────
     try {
-      const panels: unknown[] = (data as Record<string, unknown>)?.engagementPanels || [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rawPanels = (data as any)?.engagementPanels;
+      const panels: unknown[] = Array.isArray(rawPanels) ? rawPanels : [];
       for (const panel of panels) {
         const renderer = (panel as Record<string, unknown>)
           ?.engagementPanelSectionListRenderer as Record<string, unknown> | undefined;
