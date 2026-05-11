@@ -474,6 +474,6 @@ export function getCodec(mimeType: string): string {
   if (codec.startsWith("vp9") || codec === "vp09") return "VP9";
   if (codec.startsWith("av01")) return "AV1";
   if (codec.startsWith("mp4a")) return "AAC";
-  if (codec.startsWith"opus")) return "Opus";
+  if (codec.startsWith("opus")) return "Opus";
   return codec;
 }
