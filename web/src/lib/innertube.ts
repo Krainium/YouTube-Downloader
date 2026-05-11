@@ -79,80 +79,84 @@ function parseFormats(streaming: Record<string, unknown>): VideoFormat[] {
   return [...muxed, ...adaptive].filter((f) => f.url);
 }
 
-async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
-  const pageUrl = `https://www.youtube.com/watch?v=${videoId}&hl=en`;
-
-  const res = await fetch(pageUrl, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Accept":
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-      "Accept-Encoding": "identity",
-      "Sec-Fetch-Dest": "document",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "none",
-      "Upgrade-Insecure-Requests": "1",
-    },
-  });
-
-  if (!res.ok) throw new Error(`YouTube page fetch failed: ${res.status}`);
-  const html = await res.text();
-
+function extractPlayerData(html: string): Record<string, unknown> | null {
   const markerIdx = html.indexOf("ytInitialPlayerResponse");
-  if (markerIdx === -1) throw new Error("Could not find player data in page");
-
+  if (markerIdx === -1) return null;
   const eqIdx = html.indexOf("=", markerIdx);
   const startIdx = html.indexOf("{", eqIdx);
-  if (startIdx === -1) throw new Error("Could not locate player JSON in page");
-
-  let depth = 0;
-  let endIdx = startIdx;
-  const limit = Math.min(startIdx + 3_000_000, html.length);
-  for (let i = startIdx; i < limit; i++) {
+  if (startIdx === -1) return null;
+  let depth = 0, endIdx = startIdx;
+  const cap = Math.min(startIdx + 3_000_000, html.length);
+  for (let i = startIdx; i < cap; i++) {
     if (html[i] === "{") depth++;
-    else if (html[i] === "}") {
-      depth--;
-      if (depth === 0) { endIdx = i; break; }
+    else if (html[i] === "}") { depth--; if (depth === 0) { endIdx = i; break; } }
+  }
+  if (depth !== 0) return null;
+  try { return JSON.parse(html.slice(startIdx, endIdx + 1)); } catch { return null; }
+}
+
+const SCRAPE_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  "Accept-Encoding": "identity",
+  "Cookie": "CONSENT=YES+cb; SOCS=CAESEwgDEgk0OTM1MDE2NzEaAmVuIAEaBgiA_LyoBg; YSC=DwKYExXM6hI; VISITOR_INFO1_LIVE=oFPXFMrLYLo",
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+  "Upgrade-Insecure-Requests": "1",
+};
+
+async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
+  const urls = [
+    `https://www.youtube.com/watch?v=${videoId}&hl=en&gl=US`,
+    `https://www.youtube.com/watch?v=${videoId}&hl=en&gl=US&bpctr=9999999999&has_verified=1`,
+    `https://m.youtube.com/watch?v=${videoId}&hl=en`,
+  ];
+
+  let lastError = "Page scrape failed";
+  let html = "";
+
+  for (const pageUrl of urls) {
+    try {
+      const res = await fetch(pageUrl, { headers: SCRAPE_HEADERS });
+      if (!res.ok) { lastError = `HTTP ${res.status} from ${pageUrl}`; continue; }
+      html = await res.text();
+      const data = extractPlayerData(html);
+      if (data) {
+        const ps = (data.playabilityStatus as Record<string, unknown>) || {};
+        const status = ps.status as string;
+        if (status && status !== "OK") {
+          const reason = (ps.reason as string) || status;
+          throw new Error(`Video not available: ${reason}`);
+        }
+        const details = (data.videoDetails as Record<string, unknown>) || {};
+        const streaming = (data.streamingData as Record<string, unknown>) || {};
+        const thumbArr = (details.thumbnail as Record<string, unknown[]> | undefined)
+          ?.thumbnails as Array<{ url: string }> | undefined;
+        const thumbnailUrl = thumbArr
+          ? thumbArr[thumbArr.length - 1]?.url
+          : `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`;
+        return {
+          videoId,
+          title: (details.title as string) || "Unknown Title",
+          author: (details.author as string) || "Unknown",
+          lengthSeconds: (details.lengthSeconds as string) || "0",
+          viewCount: (details.viewCount as string) || "0",
+          thumbnail: thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+          description: ((details.shortDescription as string) || "").slice(0, 200),
+          formats: parseFormats(streaming),
+        };
+      }
+      lastError = `ytInitialPlayerResponse not found (page size: ${html.length}, hint: ${html.slice(0, 80).replace(/\n/g, " ")})`;
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("Video not available")) throw e;
+      lastError = e instanceof Error ? e.message : String(e);
     }
   }
-  if (depth !== 0) throw new Error("Malformed player JSON in page");
 
-  let playerData: Record<string, unknown>;
-  try {
-    playerData = JSON.parse(html.slice(startIdx, endIdx + 1));
-  } catch {
-    throw new Error("Could not parse player data from page");
-  }
-
-  const ps = (playerData.playabilityStatus as Record<string, unknown>) || {};
-  const status = ps.status as string;
-  if (status && status !== "OK") {
-    const reason = (ps.reason as string) || status;
-    throw new Error(`Video not available: ${reason}`);
-  }
-
-  const details = (playerData.videoDetails as Record<string, unknown>) || {};
-  const streaming = (playerData.streamingData as Record<string, unknown>) || {};
-
-  const thumbArr = (details.thumbnail as Record<string, unknown[]> | undefined)
-    ?.thumbnails as Array<{ url: string }> | undefined;
-  const thumbnailUrl =
-    thumbArr
-      ? thumbArr[thumbArr.length - 1]?.url
-      : `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`;
-
-  return {
-    videoId,
-    title: (details.title as string) || "Unknown Title",
-    author: (details.author as string) || "Unknown",
-    lengthSeconds: (details.lengthSeconds as string) || "0",
-    viewCount: (details.viewCount as string) || "0",
-    thumbnail: thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
-    description: ((details.shortDescription as string) || "").slice(0, 200),
-    formats: parseFormats(streaming),
-  };
+  throw new Error(`Scrape failed: ${lastError}`);
 }
 
 const ANDROID_VR_CLIENT = {
@@ -312,9 +316,12 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   try {
     const info = await fetchViaPageScrape(videoId);
     if (info.formats.length > 0) return info;
-    throw innertubeErr || new Error("No downloadable formats found");
+    throw new Error("No downloadable formats found");
   } catch (scrapeErr) {
-    throw innertubeErr || scrapeErr;
+    // Surface the scrape error so we can debug; fall back to innertube error only if scrape has no detail
+    const se = scrapeErr instanceof Error ? scrapeErr : new Error(String(scrapeErr));
+    if (se.message === "No downloadable formats found" && innertubeErr) throw innertubeErr;
+    throw se;
   }
 }
 
