@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, lazy, Suspense } from "react";
+import { useState } from "react";
+import dynamic from "next/dynamic";
 import type { VideoFormat, VideoInfo } from "@/lib/innertube";
 import { humanSize, mimeToExt, getCodec } from "@/lib/innertube";
 
-const MergeDownload = lazy(() => import("./MergeDownload"));
+const MergeDownload = dynamic(() => import("./MergeDownload"), { ssr: false });
 
 interface Props {
   info: VideoInfo;
@@ -91,13 +92,11 @@ export default function FormatList({ info }: Props) {
       {/* Video+Audio tab: Smart Merge panel + pre-muxed list */}
       {tab === "muxed" && (
         <>
-          <Suspense fallback={null}>
-            <MergeDownload
-              info={info}
-              videoFormats={videoOnlyFormats}
-              audioFormats={audioFormats}
-            />
-          </Suspense>
+          <MergeDownload
+            info={info}
+            videoFormats={videoOnlyFormats}
+            audioFormats={audioFormats}
+          />
 
           <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
             Pre-combined files below — YouTube only encodes these up to{" "}

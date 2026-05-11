@@ -142,10 +142,10 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
       </div>
 
       <p className="text-xs text-muted mb-3 leading-relaxed">
-        Downloads the video and audio streams separately, then merges them inside your browser using ffmpeg — no server processing, no upload, full quality up to{" "}
+        Get full-quality video with audio — up to{" "}
         <span className="text-purple-300">
           {videoFormats[0]?.qualityLabel ?? videoFormats[0]?.quality ?? "4K"}
-        </span>.
+        </span>. No uploads, no server processing.
       </p>
 
       <div className="flex gap-2 items-center flex-wrap">
