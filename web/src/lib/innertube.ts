@@ -35,22 +35,44 @@ function getYtCookies(): string {
   return _ytCookies;
 }
 
-// Generate SAPISIDHASH Authorization header from SAPISID cookie value.
-// YouTube requires this for authenticated innertube API calls.
-// Uses Web Crypto API (SHA-1) — available in both Node.js 16+ and browsers.
-// Format: SAPISIDHASH {timestamp}_{SHA1("{timestamp} {SAPISID} https://www.youtube.com")}
+// Generate the full SAPISIDHASH Authorization header that YouTube's web client sends.
+// Browser format (Chrome 148+):
+//   SAPISIDHASH {ts}_{sha1(SAPISID)}_u SAPISID1PHASH {ts}_{sha1(1PAPISID)}_u SAPISID3PHASH {ts}_{sha1(3PAPISID)}_u
+// Uses Web Crypto SHA-1 — available in Node.js 16+ and all browsers.
 async function buildSAPISIDHASH(cookieStr: string): Promise<string | null> {
-  const m = cookieStr.match(/(?:^|;\s*)SAPISID=([^;]+)/);
-  if (!m) return null;
-  const sapisid = m[1].trim();
+  const getVal = (name: string): string | null => {
+    const m = cookieStr.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+    return m ? m[1].trim() : null;
+  };
+  const sapisid    = getVal("SAPISID");
+  if (!sapisid) return null;
+  const sapisid1p  = getVal("__Secure-1PAPISID") || sapisid;
+  const sapisid3p  = getVal("__Secure-3PAPISID") || sapisid;
+
   const ts = Math.floor(Date.now() / 1000);
-  const msg = new TextEncoder().encode(`${ts} ${sapisid} https://www.youtube.com`);
-  try {
-    const hashBuf = await crypto.subtle.digest("SHA-1", msg);
-    const hash = Array.from(new Uint8Array(hashBuf))
+  const origin = "https://www.youtube.com";
+
+  const sha1hex = async (key: string): Promise<string> => {
+    const buf = await crypto.subtle.digest(
+      "SHA-1",
+      new TextEncoder().encode(`${ts} ${key} ${origin}`)
+    );
+    return Array.from(new Uint8Array(buf))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
-    return `SAPISIDHASH ${ts}_${hash}`;
+  };
+
+  try {
+    const [h, h1, h3] = await Promise.all([
+      sha1hex(sapisid),
+      sha1hex(sapisid1p),
+      sha1hex(sapisid3p),
+    ]);
+    return (
+      `SAPISIDHASH ${ts}_${h}_u` +
+      ` SAPISID1PHASH ${ts}_${h1}_u` +
+      ` SAPISID3PHASH ${ts}_${h3}_u`
+    );
   } catch {
     return null;
   }
@@ -273,6 +295,20 @@ const IOS_CLIENT = {
   clientId: "5",
 };
 
+// WEB client — uses real browser cookies + SAPISIDHASH for authentication.
+// Bypasses label-level restrictions that Android/TV clients can't pass from
+// datacenter IPs. Only attempted when auth cookies are available.
+// Version synced from x-youtube-client-version observed in browser (2026-05-11).
+const WEB_CLIENT = {
+  clientName: "WEB",
+  clientVersion: "2.20260508.01.0",
+  userAgent:
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+  apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+  clientId: "1",
+  isWebClient: true as const,
+};
+
 // ---------------------------------------------------------------------------
 // Visitor ID — fetched from YouTube's homepage (real, YouTube-issued).
 // Technique from kkdai/youtube: parse ytcfg.set( block, extract
@@ -401,6 +437,7 @@ type YoutubeClient = {
   userAgent: string;
   apiKey: string;
   clientId: string;
+  isWebClient?: true;
 };
 
 async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promise<VideoInfo> {
@@ -412,6 +449,7 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
 
   // Context strictly mirrors kkdai/youtube: no platform, no osName/osVersion,
   // no androidSdkVersion (sdkless variant avoids PoToken requirement).
+  // WEB client gets additional desktop-specific fields that YouTube expects.
   const clientContext: Record<string, unknown> = {
     clientName: client.clientName,
     clientVersion: client.clientVersion,
@@ -424,6 +462,14 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
   };
   if (client.deviceModel) {
     clientContext.deviceModel = client.deviceModel;
+  }
+  if (client.isWebClient) {
+    clientContext.platform = "DESKTOP";
+    clientContext.browserName = "Chrome";
+    clientContext.browserVersion = "148.0.7778.96";
+    clientContext.osName = "Windows";
+    clientContext.osVersion = "10.0";
+    clientContext.clientFormFactor = "UNKNOWN_FORM_FACTOR";
   }
 
   // thirdParty context is used by embedded/TV clients to indicate the embed origin.
@@ -462,9 +508,11 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
     "Cookie": cookieStr,
   };
 
-  // Add SAPISIDHASH Authorization header when a real auth session is loaded.
-  // This is required by YouTube for authenticated innertube API calls.
-  if (ytCookies) {
+  // SAPISIDHASH + auth headers only apply to the WEB client.
+  // Android/TV/iOS clients use a different auth model (OAuth2) — sending
+  // web session cookies to them is harmless but the SAPISIDHASH header is
+  // web-specific and must not be sent to non-web endpoints.
+  if (client.isWebClient && ytCookies) {
     const sapisidHash = await buildSAPISIDHASH(cookieStr);
     if (sapisidHash) {
       headers["Authorization"] = sapisidHash;
@@ -531,7 +579,18 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   const videoId = extractVideoId(urlOrId) || urlOrId;
   if (!videoId || videoId.length < 8) throw new Error("Invalid YouTube URL or video ID");
 
-  const clients = [ANDROID_VR_CLIENT, ANDROID_CLIENT, ANDROID_EMBEDDED_CLIENT, TV_EMBEDDED_CLIENT, IOS_CLIENT];
+  // WEB_CLIENT is appended only when auth cookies are loaded — it's the only
+  // client that honours session cookies + SAPISIDHASH and can bypass label
+  // restrictions that Android/TV clients can't clear from datacenter IPs.
+  const ytCookies = getYtCookies();
+  const clients = [
+    ANDROID_VR_CLIENT,
+    ANDROID_CLIENT,
+    ANDROID_EMBEDDED_CLIENT,
+    TV_EMBEDDED_CLIENT,
+    IOS_CLIENT,
+    ...(ytCookies ? [WEB_CLIENT] : []),
+  ];
   let lastErr: Error | null = null;
 
   for (const client of clients) {
