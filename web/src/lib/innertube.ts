@@ -444,7 +444,11 @@ function shouldTryNext(msg: string): boolean {
     m.includes("api error: 404") ||
     m.includes("api error: 429") ||
     m.includes("unplayable") ||
-    m.includes("unavailable")
+    m.includes("unavailable") ||
+    m.includes("no longer supported") ||
+    m.includes("not supported") ||
+    m.includes("age") ||
+    m.includes("content warning")
   );
 }
 
