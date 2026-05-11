@@ -12,11 +12,10 @@ async function getProxyFetch(): Promise<typeof fetch> {
   // Return cached version if the URL hasn't changed
   if (proxyUrl === _proxyUrlCached && _proxyFetch) return _proxyFetch;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { ProxyAgent, fetch: undiciFetch } = require("undici") as {
-      ProxyAgent: new (url: string) => unknown;
-      fetch: typeof fetch;
-    };
+    // webpackIgnore tells webpack to skip static analysis of this import.
+    // undici is a Node.js 18+ built-in; the server loads it at runtime.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { ProxyAgent, fetch: undiciFetch } = await import(/* webpackIgnore: true */ "undici") as any;
     const agent = new ProxyAgent(proxyUrl);
     _proxyFetch = (url: RequestInfo | URL, init?: RequestInit) =>
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
