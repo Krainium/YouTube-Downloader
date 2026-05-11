@@ -175,18 +175,27 @@ function extractPlayerData(html: string): Record<string, unknown> | null {
   try { return JSON.parse(html.slice(startIdx, endIdx + 1)); } catch { return null; }
 }
 
-const SCRAPE_HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-  "Accept-Encoding": "identity",
-  "Cookie": "CONSENT=YES+cb; SOCS=CAESEwgDEgk0OTM1MDE2NzEaAmVuIAEaBgiA_LyoBg; YSC=DwKYExXM6hI; VISITOR_INFO1_LIVE=oFPXFMrLYLo",
-  "Sec-Fetch-Dest": "document",
-  "Sec-Fetch-Mode": "navigate",
-  "Sec-Fetch-Site": "none",
-  "Upgrade-Insecure-Requests": "1",
-};
+// SCRAPE_HEADERS is kept as a function so it can use real auth cookies when available.
+// This lets the page scrape method work for label-restricted content that requires
+// a logged-in session — matching what a real Chrome browser sends to youtube.com.
+function getScrapeHeaders(): Record<string, string> {
+  const ytCookies = getYtCookies();
+  const cookieStr = ytCookies ||
+    "CONSENT=YES+cb; SOCS=CAESEwgDEgk0OTM1MDE2NzEaAmVuIAEaBgiA_LyoBg; YSC=DwKYExXM6hI; VISITOR_INFO1_LIVE=oFPXFMrLYLo";
+  return {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Encoding": "identity",
+    "Cookie": cookieStr,
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+  };
+}
 
 async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
   const urls = [
@@ -200,7 +209,7 @@ async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
 
   for (const pageUrl of urls) {
     try {
-      const res = await fetch(pageUrl, { headers: SCRAPE_HEADERS });
+      const res = await fetch(pageUrl, { headers: getScrapeHeaders() });
       if (!res.ok) { lastError = `HTTP ${res.status} from ${pageUrl}`; continue; }
       html = await res.text();
       const data = extractPlayerData(html);
