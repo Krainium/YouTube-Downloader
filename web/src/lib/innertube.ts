@@ -159,32 +159,35 @@ async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
   throw new Error(`Scrape failed: ${lastError}`);
 }
 
+// ANDROID_VR: sdkless variant (no androidSdkVersion) — bypasses PoToken requirement.
+// Version and user agent synced from kkdai/youtube (commit 87a44626, 2026-03-21).
+// Empty API key matches kkdai behavior (?key= with no value).
 const ANDROID_VR_CLIENT = {
   clientName: "ANDROID_VR",
-  clientVersion: "1.60.19",
-  androidSdkVersion: 32,
+  clientVersion: "1.65.10",
   userAgent:
-    "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12; Build/SQ3A.220705.003.A1) gzip",
-  apiKey: "AIzaSyDCU8hByM-4DrUqRUYnGn-3llEO78bcxq8",
+    "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+  apiKey: "",
   clientId: "28",
 };
 
+// ANDROID: sdkless variant — androidSdkVersion omitted deliberately.
+// Comment from kkdai/youtube: "androidVersion removed to avoid PoToken requirement".
 const ANDROID_CLIENT = {
   clientName: "ANDROID",
-  clientVersion: "19.44.38",
-  androidSdkVersion: 30,
+  clientVersion: "20.10.38",
   userAgent:
-    "com.google.android.youtube/19.44.38(Linux; U; Android 11; en_US; sdk_gphone64_x86_64 Build/RSR1.201013.001) gzip",
+    "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
   apiKey: "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
   clientId: "3",
 };
 
+// ANDROID_EMBEDDED: also sdkless, no androidSdkVersion.
 const ANDROID_EMBEDDED_CLIENT = {
   clientName: "ANDROID_EMBEDDED_PLAYER",
-  clientVersion: "19.44.38",
-  androidSdkVersion: 30,
+  clientVersion: "20.10.38",
   userAgent:
-    "com.google.android.youtube/19.44.38(Linux; U; Android 11; en_US; sdk_gphone64_x86_64 Build/RSR1.201013.001) gzip",
+    "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
   apiKey: "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
   clientId: "55",
 };
@@ -194,10 +197,20 @@ const IOS_CLIENT = {
   clientVersion: "19.45.4",
   deviceModel: "iPhone16,2",
   userAgent:
-    "com.google.ios.youtube/19.45.4 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X; en_US) gzip",
-  apiKey: "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc",
+    "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)",
+  apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
   clientId: "5",
 };
+
+// ---------------------------------------------------------------------------
+// Visitor ID — fetched from YouTube's homepage (real, YouTube-issued).
+// Technique from kkdai/youtube: parse ytcfg.set( block, extract
+// INNERTUBE_CONTEXT.Client.VisitorData. Cached 10 hours; falls back to a
+// random proto-encoded value if the fetch fails.
+// ---------------------------------------------------------------------------
+const VISITOR_ID_MAX_AGE_MS = 10 * 60 * 60 * 1000; // 10 hours
+let _cachedVisitorId = "";
+let _cachedVisitorIdAt = 0;
 
 function randStr(n: number): string {
   const a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -253,10 +266,43 @@ function randomVisitorData(): string {
   return encodeURIComponent(b64.replace(/\+/g, "-").replace(/\//g, "_"));
 }
 
+async function getVisitorData(): Promise<string> {
+  const now = Date.now();
+  if (_cachedVisitorId && now - _cachedVisitorIdAt < VISITOR_ID_MAX_AGE_MS) {
+    return _cachedVisitorId;
+  }
+  try {
+    const res = await fetch("https://www.youtube.com", {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    const SEP = "\nytcfg.set(";
+    const idx = html.indexOf(SEP);
+    if (idx === -1) throw new Error("ytcfg.set not found");
+    const fragment = html.slice(idx + SEP.length);
+    // JSON parse the first complete object
+    const parsed = JSON.parse(fragment.slice(0, fragment.indexOf("\n)")));
+    const raw: string =
+      parsed?.INNERTUBE_CONTEXT?.client?.visitorData ?? "";
+    if (!raw) throw new Error("visitorData not found in ytcfg");
+    _cachedVisitorId = decodeURIComponent(raw);
+    _cachedVisitorIdAt = now;
+    return _cachedVisitorId;
+  } catch {
+    // Fallback: return a randomly generated visitor ID
+    return randomVisitorData();
+  }
+}
+
 type YoutubeClient = {
   clientName: string;
   clientVersion: string;
-  androidSdkVersion?: number;
   deviceModel?: string;
   userAgent: string;
   apiKey: string;
@@ -264,40 +310,36 @@ type YoutubeClient = {
 };
 
 async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promise<VideoInfo> {
-  const visitorData = randomVisitorData();
+  // Use real YouTube-issued visitor ID (technique from kkdai/youtube).
+  const visitorData = await getVisitorData();
+
+  // key= is intentionally empty for ANDROID_VR (matches kkdai/youtube behavior).
   const apiUrl = `https://www.youtube.com/youtubei/v1/player?key=${client.apiKey}&prettyPrint=false`;
 
+  // Context strictly mirrors kkdai/youtube: no platform, no osName/osVersion,
+  // no androidSdkVersion (sdkless variant avoids PoToken requirement).
   const clientContext: Record<string, unknown> = {
     clientName: client.clientName,
     clientVersion: client.clientVersion,
     userAgent: client.userAgent,
-    platform: "MOBILE",
-    visitorData,
     hl: "en",
     gl: "US",
+    timeZone: "UTC",
     utcOffsetMinutes: 0,
+    visitorData,
   };
-  if (client.androidSdkVersion) {
-    clientContext.androidSdkVersion = client.androidSdkVersion;
-    clientContext.osName = "Android";
-    clientContext.osVersion = client.androidSdkVersion >= 30 ? "11" : "12";
-  }
   if (client.deviceModel) {
     clientContext.deviceModel = client.deviceModel;
-    clientContext.osName = "iOS";
-    clientContext.osVersion = "17.5.1.21F90";
   }
 
   const body = {
     videoId,
     context: {
       client: clientContext,
-      thirdParty: { embedUrl: "https://www.youtube.com/" },
     },
     playbackContext: {
       contentPlaybackContext: {
         html5Preference: "HTML5_PREF_WANTS",
-        signatureTimestamp: 19950,
       },
     },
     racyCheckOk: true,
@@ -308,6 +350,7 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "User-Agent": client.userAgent,
       "X-YouTube-Client-Name": client.clientId,
       "X-YouTube-Client-Version": client.clientVersion,
@@ -431,6 +474,6 @@ export function getCodec(mimeType: string): string {
   if (codec.startsWith("vp9") || codec === "vp09") return "VP9";
   if (codec.startsWith("av01")) return "AV1";
   if (codec.startsWith("mp4a")) return "AAC";
-  if (codec.startsWith("opus")) return "Opus";
+  if (codec.startsWith"opus")) return "Opus";
   return codec;
 }
