@@ -659,10 +659,10 @@ async function fetchNextData(videoId: string, useProxy: boolean): Promise<NextEn
 
     // ── Primary + secondary info ─────────────────────────────────────────────
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyData = data as any;
       const contents: unknown[] =
-        (data as Record<string, unknown>)?.contents
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ?.twoColumnWatchNextResults?.results?.results?.contents || [];
+        anyData?.contents?.twoColumnWatchNextResults?.results?.results?.contents || [];
 
       for (const c of contents) {
         const item = c as Record<string, unknown>;
