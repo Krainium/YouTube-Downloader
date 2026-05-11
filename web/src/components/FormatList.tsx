@@ -8,19 +8,29 @@ interface Props {
   info: VideoInfo;
 }
 
-type Tab = "muxed" | "video" | "audio";
+type Tab = "video" | "audio";
+
+// Sort by height descending (best quality first); fall back to bitrate
+function byQuality(a: VideoFormat, b: VideoFormat): number {
+  const ha = a.height ?? 0, hb = b.height ?? 0;
+  if (hb !== ha) return hb - ha;
+  return (b.bitrate ?? 0) - (a.bitrate ?? 0);
+}
 
 export default function FormatList({ info }: Props) {
-  const [tab, setTab] = useState<Tab>("muxed");
+  const [tab, setTab] = useState<Tab>("video");
   const [downloading, setDownloading] = useState<number | null>(null);
 
-  const byType = {
-    muxed: info.formats.filter(f => f.type === "muxed"),
-    video: info.formats.filter(f => f.type === "video"),
-    audio: info.formats.filter(f => f.type === "audio"),
-  };
+  // Video tab = muxed (video+audio) + video-only adaptive, all sorted by quality
+  const videoFormats = info.formats
+    .filter(f => f.type === "muxed" || f.type === "video")
+    .sort(byQuality);
 
-  const current = byType[tab];
+  const audioFormats = info.formats
+    .filter(f => f.type === "audio")
+    .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+
+  const current = tab === "video" ? videoFormats : audioFormats;
 
   async function handleDownload(fmt: VideoFormat) {
     if (!fmt.url) return;
@@ -42,9 +52,8 @@ export default function FormatList({ info }: Props) {
   }
 
   const tabs: { id: Tab; label: string; count: number }[] = [
-    { id: "muxed", label: "Video+Audio", count: byType.muxed.length },
-    { id: "video", label: "Video Only", count: byType.video.length },
-    { id: "audio", label: "Audio Only", count: byType.audio.length },
+    { id: "video", label: "Video", count: videoFormats.length },
+    { id: "audio", label: "Audio Only", count: audioFormats.length },
   ];
 
   return (
@@ -99,10 +108,10 @@ export default function FormatList({ info }: Props) {
                   {fmt.fps && fmt.fps > 0 && (
                     <span className="text-xs text-muted">{fmt.fps}fps</span>
                   )}
-                  {/* Muxed tag */}
+                  {/* Muxed = has audio built in */}
                   {fmt.type === "muxed" && (
                     <span className="text-xs bg-green-500/10 text-green-400 border border-green-500/20 rounded px-1.5 py-0.5">
-                      muxed
+                      +audio
                     </span>
                   )}
                 </div>
