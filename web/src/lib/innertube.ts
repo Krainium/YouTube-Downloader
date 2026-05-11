@@ -101,8 +101,8 @@ async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
   const html = await res.text();
 
   const patterns = [
-    /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;(?:var |<\/script>)/s,
-    /ytInitialPlayerResponse\s*=\s*(\{.+?\});/s,
+    /ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\})\s*;(?:var |<\/script>)/,
+    /ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});/,
   ];
 
   let playerData: Record<string, unknown> | null = null;
