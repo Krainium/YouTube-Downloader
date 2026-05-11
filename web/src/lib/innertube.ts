@@ -166,6 +166,37 @@ const ANDROID_VR_CLIENT = {
   userAgent:
     "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12; Build/SQ3A.220705.003.A1) gzip",
   apiKey: "AIzaSyDCU8hByM-4DrUqRUYnGn-3llEO78bcxq8",
+  clientId: "28",
+};
+
+const ANDROID_CLIENT = {
+  clientName: "ANDROID",
+  clientVersion: "19.44.38",
+  androidSdkVersion: 30,
+  userAgent:
+    "com.google.android.youtube/19.44.38(Linux; U; Android 11; en_US; sdk_gphone64_x86_64 Build/RSR1.201013.001) gzip",
+  apiKey: "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
+  clientId: "3",
+};
+
+const ANDROID_EMBEDDED_CLIENT = {
+  clientName: "ANDROID_EMBEDDED_PLAYER",
+  clientVersion: "19.44.38",
+  androidSdkVersion: 30,
+  userAgent:
+    "com.google.android.youtube/19.44.38(Linux; U; Android 11; en_US; sdk_gphone64_x86_64 Build/RSR1.201013.001) gzip",
+  apiKey: "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
+  clientId: "55",
+};
+
+const IOS_CLIENT = {
+  clientName: "IOS",
+  clientVersion: "19.45.4",
+  deviceModel: "iPhone16,2",
+  userAgent:
+    "com.google.ios.youtube/19.45.4 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X; en_US) gzip",
+  apiKey: "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc",
+  clientId: "5",
 };
 
 function randStr(n: number): string {
@@ -222,26 +253,45 @@ function randomVisitorData(): string {
   return encodeURIComponent(b64.replace(/\+/g, "-").replace(/\//g, "_"));
 }
 
-async function fetchViaInnertube(videoId: string): Promise<VideoInfo> {
+type YoutubeClient = {
+  clientName: string;
+  clientVersion: string;
+  androidSdkVersion?: number;
+  deviceModel?: string;
+  userAgent: string;
+  apiKey: string;
+  clientId: string;
+};
+
+async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promise<VideoInfo> {
   const visitorData = randomVisitorData();
-  const apiUrl = `https://www.youtube.com/youtubei/v1/player?key=${ANDROID_VR_CLIENT.apiKey}&prettyPrint=false`;
+  const apiUrl = `https://www.youtube.com/youtubei/v1/player?key=${client.apiKey}&prettyPrint=false`;
+
+  const clientContext: Record<string, unknown> = {
+    clientName: client.clientName,
+    clientVersion: client.clientVersion,
+    userAgent: client.userAgent,
+    platform: "MOBILE",
+    visitorData,
+    hl: "en",
+    gl: "US",
+    utcOffsetMinutes: 0,
+  };
+  if (client.androidSdkVersion) {
+    clientContext.androidSdkVersion = client.androidSdkVersion;
+    clientContext.osName = "Android";
+    clientContext.osVersion = client.androidSdkVersion >= 30 ? "11" : "12";
+  }
+  if (client.deviceModel) {
+    clientContext.deviceModel = client.deviceModel;
+    clientContext.osName = "iOS";
+    clientContext.osVersion = "17.5.1.21F90";
+  }
 
   const body = {
     videoId,
     context: {
-      client: {
-        clientName: ANDROID_VR_CLIENT.clientName,
-        clientVersion: ANDROID_VR_CLIENT.clientVersion,
-        androidSdkVersion: ANDROID_VR_CLIENT.androidSdkVersion,
-        userAgent: ANDROID_VR_CLIENT.userAgent,
-        osName: "Android",
-        osVersion: "12",
-        platform: "MOBILE",
-        visitorData,
-        hl: "en",
-        gl: "US",
-        utcOffsetMinutes: 0,
-      },
+      client: clientContext,
       thirdParty: { embedUrl: "https://www.youtube.com/" },
     },
     playbackContext: {
@@ -258,9 +308,9 @@ async function fetchViaInnertube(videoId: string): Promise<VideoInfo> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "User-Agent": ANDROID_VR_CLIENT.userAgent,
-      "X-YouTube-Client-Name": "28",
-      "X-YouTube-Client-Version": ANDROID_VR_CLIENT.clientVersion,
+      "User-Agent": client.userAgent,
+      "X-YouTube-Client-Name": client.clientId,
+      "X-YouTube-Client-Version": client.clientVersion,
       "X-Goog-Visitor-Id": visitorData,
       "Origin": "https://www.youtube.com",
       "Referer": "https://www.youtube.com/",
@@ -296,21 +346,37 @@ async function fetchViaInnertube(videoId: string): Promise<VideoInfo> {
   };
 }
 
+function shouldTryNext(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("sign in") ||
+    m.includes("login") ||
+    m.includes("bot") ||
+    m.includes("login_required") ||
+    m.includes("api error: 400") ||
+    m.includes("api error: 403") ||
+    m.includes("api error: 429") ||
+    m.includes("unplayable") ||
+    m.includes("unavailable")
+  );
+}
+
 export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   const videoId = extractVideoId(urlOrId) || urlOrId;
   if (!videoId || videoId.length < 8) throw new Error("Invalid YouTube URL or video ID");
 
-  let innertubeErr: Error | null = null;
+  const clients = [ANDROID_VR_CLIENT, ANDROID_CLIENT, ANDROID_EMBEDDED_CLIENT, IOS_CLIENT];
+  let lastErr: Error | null = null;
 
-  try {
-    const info = await fetchViaInnertube(videoId);
-    if (info.formats.length > 0) return info;
-  } catch (err) {
-    innertubeErr = err instanceof Error ? err : new Error(String(err));
-    const isBotDetected = innertubeErr.message.toLowerCase().includes("sign in") ||
-      innertubeErr.message.toLowerCase().includes("login") ||
-      innertubeErr.message.toLowerCase().includes("bot");
-    if (!isBotDetected) throw innertubeErr;
+  for (const client of clients) {
+    try {
+      const info = await fetchViaInnertube(videoId, client);
+      if (info.formats.length > 0) return info;
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      lastErr = e;
+      if (!shouldTryNext(e.message)) throw e;
+    }
   }
 
   try {
@@ -318,9 +384,8 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
     if (info.formats.length > 0) return info;
     throw new Error("No downloadable formats found");
   } catch (scrapeErr) {
-    // Surface the scrape error so we can debug; fall back to innertube error only if scrape has no detail
     const se = scrapeErr instanceof Error ? scrapeErr : new Error(String(scrapeErr));
-    if (se.message === "No downloadable formats found" && innertubeErr) throw innertubeErr;
+    if (se.message === "No downloadable formats found" && lastErr) throw lastErr;
     throw se;
   }
 }
