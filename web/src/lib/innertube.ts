@@ -1,4 +1,35 @@
 // ---------------------------------------------------------------------------
+// Proxy fetch — routes all YouTube API calls through PROXY_URL when set.
+// Uses undici ProxyAgent (bundled with Node.js 18+ / next's internal fetch).
+// Falls back to global fetch when no proxy is configured.
+// ---------------------------------------------------------------------------
+let _proxyFetch: typeof fetch | null = null;
+let _proxyUrlCached = "";
+
+async function getProxyFetch(): Promise<typeof fetch> {
+  const proxyUrl = process.env.PROXY_URL;
+  if (!proxyUrl || typeof window !== "undefined") return fetch;
+  // Return cached version if the URL hasn't changed
+  if (proxyUrl === _proxyUrlCached && _proxyFetch) return _proxyFetch;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { ProxyAgent, fetch: undiciFetch } = require("undici") as {
+      ProxyAgent: new (url: string) => unknown;
+      fetch: typeof fetch;
+    };
+    const agent = new ProxyAgent(proxyUrl);
+    _proxyFetch = (url: RequestInfo | URL, init?: RequestInit) =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      undiciFetch(url as string, { ...init, dispatcher: agent } as any);
+    _proxyUrlCached = proxyUrl;
+    return _proxyFetch;
+  } catch {
+    // undici unavailable — fall back to global fetch (no proxy)
+    return fetch;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // YouTube auth cookie loading.
 // Priority: YOUTUBE_COOKIES env var > cookies.txt file in project root.
 // The cookie string is the raw "Cookie" header value from an authenticated
@@ -209,7 +240,8 @@ async function fetchViaPageScrape(videoId: string): Promise<VideoInfo> {
 
   for (const pageUrl of urls) {
     try {
-      const res = await fetch(pageUrl, { headers: getScrapeHeaders() });
+      const proxyFetch = await getProxyFetch();
+      const res = await proxyFetch(pageUrl, { headers: getScrapeHeaders() });
       if (!res.ok) { lastError = `HTTP ${res.status} from ${pageUrl}`; continue; }
       html = await res.text();
       const data = extractPlayerData(html);
@@ -530,7 +562,8 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient): Promis
     }
   }
 
-  const res = await fetch(apiUrl, {
+  const proxyFetch = await getProxyFetch();
+  const res = await proxyFetch(apiUrl, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -588,18 +621,30 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   const videoId = extractVideoId(urlOrId) || urlOrId;
   if (!videoId || videoId.length < 8) throw new Error("Invalid YouTube URL or video ID");
 
-  // WEB_CLIENT is appended only when auth cookies are loaded — it's the only
-  // client that honours session cookies + SAPISIDHASH and can bypass label
-  // restrictions that Android/TV clients can't clear from datacenter IPs.
+  // Client order strategy:
+  // - With proxy: ANDROID first (tested OK for restricted content through ISP proxy),
+  //   then ANDROID_VR (very reliable for public content without proxy bypass needed).
+  // - Without proxy: ANDROID_VR first (sdkless, no PoToken needed, works for public).
+  // WEB_CLIENT appended only when auth cookies are present.
   const ytCookies = getYtCookies();
-  const clients = [
-    ANDROID_VR_CLIENT,
-    ANDROID_CLIENT,
-    ANDROID_EMBEDDED_CLIENT,
-    TV_EMBEDDED_CLIENT,
-    IOS_CLIENT,
-    ...(ytCookies ? [WEB_CLIENT] : []),
-  ];
+  const hasProxy = !!process.env.PROXY_URL;
+  const clients = hasProxy
+    ? [
+        ANDROID_CLIENT,
+        ANDROID_VR_CLIENT,
+        IOS_CLIENT,
+        ANDROID_EMBEDDED_CLIENT,
+        TV_EMBEDDED_CLIENT,
+        ...(ytCookies ? [WEB_CLIENT] : []),
+      ]
+    : [
+        ANDROID_VR_CLIENT,
+        ANDROID_CLIENT,
+        ANDROID_EMBEDDED_CLIENT,
+        TV_EMBEDDED_CLIENT,
+        IOS_CLIENT,
+        ...(ytCookies ? [WEB_CLIENT] : []),
+      ];
   let lastErr: Error | null = null;
 
   for (const client of clients) {
