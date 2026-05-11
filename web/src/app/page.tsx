@@ -74,7 +74,7 @@ export default function Home() {
             </div>
             <h1 className="text-5xl font-black tracking-tight text-text mb-4 leading-none">
               Download any<br />
-              <span className="text-accent">YouTube</span> video
+              <span className="text-accent">YouTube</span> video/Music
             </h1>
             <p className="text-sub text-base max-w-md mx-auto leading-relaxed">
               Paste a URL below. Get every available format — MP4, WebM, M4A — direct from YouTube&apos;s servers.
