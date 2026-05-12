@@ -13,18 +13,20 @@ interface ProxyResponse {
   json(): Promise<unknown>;
 }
 
-function unchunkBody(raw: string): string {
-  const parts: string[] = [];
+// Decode HTTP/1.1 chunked transfer encoding at the Buffer (byte) level.
+// Chunk sizes are byte counts — must not mix with JS string character indices.
+function unchunkBuffer(data: Buffer): Buffer {
+  const parts: Buffer[] = [];
   let pos = 0;
-  while (pos < raw.length) {
-    const nl = raw.indexOf("\r\n", pos);
+  while (pos < data.length) {
+    const nl = data.indexOf(Buffer.from("\r\n"), pos);
     if (nl === -1) break;
-    const size = parseInt(raw.slice(pos, nl), 16);
-    if (!size || isNaN(size)) break;
-    parts.push(raw.slice(nl + 2, nl + 2 + size));
+    const size = parseInt(data.slice(pos, nl).toString("ascii").split(";")[0].trim(), 16);
+    if (isNaN(size) || size === 0) break;
+    parts.push(data.slice(nl + 2, nl + 2 + size));
     pos = nl + 2 + size + 2;
   }
-  return parts.length > 0 ? parts.join("") : raw;
+  return parts.length > 0 ? Buffer.concat(parts) : data;
 }
 
 async function proxyFetch(
@@ -92,24 +94,30 @@ async function proxyFetch(
           tlsSock.write(reqStr);
           if (bodyBuf.length > 0) tlsSock.write(bodyBuf);
 
-          // Step 4 — collect the response.
-          const chunks: Buffer[] = [];
-          tlsSock.on("data", (c: Buffer) => chunks.push(c));
+          // Step 4 — collect the response as raw bytes.
+          const bufChunks: Buffer[] = [];
+          tlsSock.on("data", (c: Buffer) => bufChunks.push(c));
           tlsSock.on("error", reject);
           tlsSock.on("end", () => {
-            const raw     = Buffer.concat(chunks).toString("utf8");
-            const sepIdx  = raw.indexOf("\r\n\r\n");
+            const rawBuf  = Buffer.concat(bufChunks);
+            // Locate header/body boundary at byte level.
+            const sepIdx  = rawBuf.indexOf(Buffer.from("\r\n\r\n"));
             if (sepIdx === -1) return reject(new Error("proxy-bad-response"));
 
-            const firstLine  = raw.slice(0, raw.indexOf("\r\n"));
+            const headersStr = rawBuf.slice(0, sepIdx).toString("ascii");
+            const firstLine  = headersStr.slice(0, headersStr.indexOf("\r\n"));
             const statusCode = Number(firstLine.split(" ")[1] ?? "0");
-            const hdrsLower  = raw.slice(0, sepIdx).toLowerCase();
-            let body         = raw.slice(sepIdx + 4);
+            const hdrsLower  = headersStr.toLowerCase();
 
+            // Decode chunked encoding at Buffer level — chunk sizes are byte counts,
+            // NOT JavaScript string character counts (important for multi-byte UTF-8).
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let bodyBuf: Buffer = rawBuf.slice(sepIdx + 4) as any;
             if (hdrsLower.includes("transfer-encoding: chunked")) {
-              body = unchunkBody(body);
+              bodyBuf = unchunkBuffer(bodyBuf);
             }
 
+            const body = bodyBuf.toString("utf8");
             resolve({
               ok:     statusCode >= 200 && statusCode < 300,
               status: statusCode,
