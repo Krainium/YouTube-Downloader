@@ -24,6 +24,8 @@ const nextConfig = {
           : [existingExternals]),
         ({ request }, callback) => {
           if (request === "undici") return callback(null, "commonjs undici");
+          // Node.js built-ins with node: prefix — never bundle, resolve at runtime
+          if (request?.startsWith("node:")) return callback(null, `commonjs ${request}`);
           // ffmpeg packages are client-only — never bundle on server
           if (request?.startsWith("@ffmpeg/")) return callback(null, `commonjs ${request}`);
           callback();
