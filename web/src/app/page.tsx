@@ -205,7 +205,7 @@ export default function Home() {
                 ))}
               </div>
               <p className="text-muted text-sm">
-                Supports youtube.com · youtu.be · Shorts · Embeds
+                Supports youtube.com · youtu.be · Shorts · Embeds · YT Music · music.youtube.com
               </p>
             </div>
           )}
