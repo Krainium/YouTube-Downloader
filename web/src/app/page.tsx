@@ -54,6 +54,13 @@ export default function Home() {
     }
   };
 
+  const handleClear = () => {
+    setUrl("");
+    setInfo(null);
+    setError(null);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
   return (
     <>
       {!splashDone && <SplashScreen onDone={() => setSplashDone(true)} />}
@@ -124,6 +131,21 @@ export default function Home() {
                     <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
                   </svg>
                 </button>
+
+                {/* Clear btn — only visible when there's something to clear */}
+                {(url || info || error) && (
+                  <button
+                    onClick={handleClear}
+                    title="Clear and start over"
+                    aria-label="Clear URL and results"
+                    className="shrink-0 text-muted hover:text-red-400 transition-colors p-2.5 rounded-lg hover:bg-surface min-h-[44px] min-w-[44px] flex items-center justify-center"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                )}
               </div>
             </div>
 

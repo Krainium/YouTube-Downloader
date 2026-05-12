@@ -29,8 +29,12 @@ export default function Header() {
       {/* Main nav bar */}
       <div className="border-b border-border/60 bg-surface/80 backdrop-blur-xl">
         <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
-          {/* Logo */}
-          <div className="flex items-center gap-3">
+          {/* Logo — clicking reloads the main page */}
+          <a
+            href="/"
+            aria-label="YTDL home"
+            className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+          >
             <div className="relative">
               <div className="absolute inset-0 blur-md bg-accent/30 rounded-lg" />
               <svg width="36" height="36" viewBox="0 0 80 80" fill="none" className="relative z-10">
@@ -45,7 +49,7 @@ export default function Header() {
               </span>
               <span className="hidden sm:inline text-muted text-xs ml-2 font-mono">v2.0</span>
             </div>
-          </div>
+          </a>
 
           {/* Nav */}
           <div className="hidden md:flex items-center gap-6 text-sm">
