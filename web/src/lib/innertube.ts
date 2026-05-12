@@ -1,32 +1,128 @@
 // ---------------------------------------------------------------------------
-// Proxy fetch — routes all YouTube API calls through PROXY_URL when set.
-// Uses undici ProxyAgent (bundled with Node.js 18+ / next's internal fetch).
-// Falls back to global fetch when no proxy is configured.
+// Proxy fetch — native Node.js HTTPS-over-HTTP-CONNECT tunnel.
+// Replaces undici ProxyAgent which silently falls back to direct fetch when
+// the proxy connection fails on some hosting platforms (e.g. Vercel AWS IPs).
+// This implementation actually throws if the proxy cannot be reached, so the
+// caller knows the proxy failed and can fall through to the page-scrape path.
 // ---------------------------------------------------------------------------
-let _proxyFetch: typeof fetch | null = null;
-let _proxyUrlCached = "";
 
-async function getProxyFetch(): Promise<typeof fetch> {
-  const proxyUrl = process.env.PROXY_URL;
-  if (!proxyUrl || typeof window !== "undefined") return fetch;
-  // Return cached version if the URL hasn't changed
-  if (proxyUrl === _proxyUrlCached && _proxyFetch) return _proxyFetch;
-  try {
-    // webpackIgnore tells webpack to skip static analysis of this import.
-    // undici is a Node.js 18+ built-in; the server loads it at runtime.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    // @ts-ignore – undici resolved at runtime by Node; not in local TS paths
-    const { ProxyAgent, fetch: undiciFetch } = await import(/* webpackIgnore: true */ "undici") as any;
-    const agent = new ProxyAgent(proxyUrl);
-    _proxyFetch = (url: RequestInfo | URL, init?: RequestInit) =>
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      undiciFetch(url as string, { ...init, dispatcher: agent } as any);
-    _proxyUrlCached = proxyUrl;
-    return _proxyFetch;
-  } catch {
-    // undici unavailable — fall back to global fetch (no proxy)
-    return fetch;
+interface ProxyResponse {
+  ok: boolean;
+  status: number;
+  text(): Promise<string>;
+  json(): Promise<unknown>;
+}
+
+function unchunkBody(raw: string): string {
+  const parts: string[] = [];
+  let pos = 0;
+  while (pos < raw.length) {
+    const nl = raw.indexOf("\r\n", pos);
+    if (nl === -1) break;
+    const size = parseInt(raw.slice(pos, nl), 16);
+    if (!size || isNaN(size)) break;
+    parts.push(raw.slice(nl + 2, nl + 2 + size));
+    pos = nl + 2 + size + 2;
   }
+  return parts.length > 0 ? parts.join("") : raw;
+}
+
+async function proxyFetch(
+  targetUrl: string,
+  init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+): Promise<ProxyResponse> {
+  const proxyUrl = process.env.PROXY_URL;
+  if (!proxyUrl) throw new Error("PROXY_URL not set");
+
+  const proxy = new URL(proxyUrl);
+  const target = new URL(targetUrl);
+
+  // Dynamic imports — safe in Node.js server context, ignored by webpack on client.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const http = require("node:http") as typeof import("http");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const tls  = require("node:tls")  as typeof import("tls");
+
+  return new Promise<ProxyResponse>((resolve, reject) => {
+    const proxyAuth = Buffer.from(
+      `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`
+    ).toString("base64");
+
+    // Step 1 — open an HTTP CONNECT tunnel through the proxy.
+    const connectReq = http.request({
+      host: proxy.hostname,
+      port: Number(proxy.port) || 3128,
+      method: "CONNECT",
+      path: `${target.hostname}:443`,
+      headers: {
+        Host: `${target.hostname}:443`,
+        "Proxy-Authorization": `Basic ${proxyAuth}`,
+      },
+    });
+    connectReq.setTimeout(15_000, () => connectReq.destroy(new Error("proxy-connect-timeout")));
+    connectReq.on("error", reject);
+
+    connectReq.on("connect", (res, socket) => {
+      if ((res.statusCode ?? 0) !== 200) {
+        socket.destroy();
+        return reject(new Error(`proxy-connect-failed:${res.statusCode}`));
+      }
+
+      // Step 2 — TLS handshake over the raw tunnel socket.
+      const tlsSock = tls.connect(
+        { socket, servername: target.hostname, rejectUnauthorized: false },
+        () => {
+          const method  = (init.method ?? "GET").toUpperCase();
+          const bodyBuf = init.body ? Buffer.from(init.body, "utf8") : Buffer.alloc(0);
+          const reqPath = `${target.pathname}${target.search}`;
+          const extraHdrs = Object.entries({ ...init.headers, "Accept-Encoding": "identity" })
+            .map(([k, v]) => `${k}: ${v}`)
+            .join("\r\n");
+
+          // Step 3 — write HTTP/1.1 request over TLS.
+          let reqStr =
+            `${method} ${reqPath} HTTP/1.1\r\n` +
+            `Host: ${target.hostname}\r\n` +
+            `Connection: close\r\n` +
+            `${extraHdrs}\r\n`;
+          if (bodyBuf.length > 0) reqStr += `Content-Length: ${bodyBuf.length}\r\n`;
+          reqStr += "\r\n";
+
+          tlsSock.write(reqStr);
+          if (bodyBuf.length > 0) tlsSock.write(bodyBuf);
+
+          // Step 4 — collect the response.
+          const chunks: Buffer[] = [];
+          tlsSock.on("data", (c: Buffer) => chunks.push(c));
+          tlsSock.on("error", reject);
+          tlsSock.on("end", () => {
+            const raw     = Buffer.concat(chunks).toString("utf8");
+            const sepIdx  = raw.indexOf("\r\n\r\n");
+            if (sepIdx === -1) return reject(new Error("proxy-bad-response"));
+
+            const firstLine  = raw.slice(0, raw.indexOf("\r\n"));
+            const statusCode = Number(firstLine.split(" ")[1] ?? "0");
+            const hdrsLower  = raw.slice(0, sepIdx).toLowerCase();
+            let body         = raw.slice(sepIdx + 4);
+
+            if (hdrsLower.includes("transfer-encoding: chunked")) {
+              body = unchunkBody(body);
+            }
+
+            resolve({
+              ok:     statusCode >= 200 && statusCode < 300,
+              status: statusCode,
+              text:   async () => body,
+              json:   async () => JSON.parse(body),
+            });
+          });
+        },
+      );
+      tlsSock.on("error", reject);
+    });
+
+    connectReq.end();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -262,8 +358,10 @@ async function fetchViaPageScrape(videoId: string, useProxy = true): Promise<Omi
 
   for (const pageUrl of urls) {
     try {
-      const fetchFn = useProxy ? await getProxyFetch() : fetch;
-      const res = await fetchFn(pageUrl, { headers: getScrapeHeaders() });
+      const res: ProxyResponse = useProxy && process.env.PROXY_URL
+        ? await proxyFetch(pageUrl, { headers: getScrapeHeaders() })
+        : await fetch(pageUrl, { headers: getScrapeHeaders() })
+            .then(r => ({ ok: r.ok, status: r.status, text: () => r.text(), json: () => r.json() }));
       if (!res.ok) { lastError = `HTTP ${res.status} from ${pageUrl}`; continue; }
       html = await res.text();
       const data = extractPlayerData(html);
@@ -589,15 +687,14 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient, useProx
     }
   }
 
-  const fetchFn = useProxy ? await getProxyFetch() : fetch;
-  const res = await fetchFn(apiUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
+  const res: ProxyResponse = useProxy && process.env.PROXY_URL
+    ? await proxyFetch(apiUrl, { method: "POST", headers, body: JSON.stringify(body) })
+    : await fetch(apiUrl, { method: "POST", headers, body: JSON.stringify(body) })
+        .then(r => ({ ok: r.ok, status: r.status, text: () => r.text(), json: () => r.json() }));
 
   if (!res.ok) throw new Error(`api error: ${res.status} (client: ${client.clientName})`);
-  const data = await res.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data = await res.json() as any;
 
   const status = data?.playabilityStatus?.status;
   if (status && status !== "OK") {
@@ -656,17 +753,16 @@ async function fetchNextData(videoId: string, useProxy: boolean): Promise<NextEn
         },
       },
     };
-    const fetchFn = useProxy ? await getProxyFetch() : fetch;
-    const res = await fetchFn(apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": WEB_CLIENT.userAgent,
-        "X-YouTube-Client-Name": WEB_CLIENT.clientId,
-        "X-YouTube-Client-Version": WEB_CLIENT.clientVersion,
-      },
-      body: JSON.stringify(body),
-    });
+    const nextHeaders: Record<string, string> = {
+      "Content-Type": "application/json",
+      "User-Agent": WEB_CLIENT.userAgent,
+      "X-YouTube-Client-Name": WEB_CLIENT.clientId,
+      "X-YouTube-Client-Version": WEB_CLIENT.clientVersion,
+    };
+    const res: ProxyResponse = useProxy && process.env.PROXY_URL
+      ? await proxyFetch(apiUrl, { method: "POST", headers: nextHeaders, body: JSON.stringify(body) })
+      : await fetch(apiUrl, { method: "POST", headers: nextHeaders, body: JSON.stringify(body) })
+          .then(r => ({ ok: r.ok, status: r.status, text: () => r.text(), json: () => r.json() }));
     if (!res.ok) return {};
     const data = await res.json();
 
@@ -809,6 +905,8 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
 
   // ── Phase 2: Proxy fetch (restricted / label-blocked content) ────────────
   // Run when we have no result yet, OR when we only have muxed-only so far.
+  // Always continue to the next client on error — a proxy network error on one
+  // client should not stop the remaining clients from being tried.
   if ((!coreInfo || !hasAdaptive(coreInfo)) && process.env.PROXY_URL) {
     for (const client of proxyClients) {
       try {
@@ -821,7 +919,12 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         lastErr = e;
-        if (!shouldTryNext(e.message)) break;
+        // Only hard-stop on genuine "content unavailable" errors, not network/proxy failures.
+        const m = e.message.toLowerCase();
+        const isContentError = m.includes("video unavailable") || m.includes("private video") ||
+          m.includes("has been removed") || m.includes("not available in your country");
+        if (isContentError) break;
+        // Everything else (login required, bot, api error, proxy error) → try next client.
       }
     }
   }
