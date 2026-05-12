@@ -14,7 +14,6 @@ A privacy-first YouTube downloader that runs entirely in your browser. No sign-i
 
 - **Smart Merge** — merges a high-quality video-only stream with audio using ffmpeg compiled to WebAssembly, completely in-browser. Supports up to 4K.
 - **Dubbed language picker** — when a video has dubbed audio tracks (e.g. Hindi, Spanish, French…), Smart Merge shows a second dropdown so you can pick exactly which language to pair with the video. The original language is always pre-selected. No other public downloader exposes this.
-- **ISP proxy for restricted videos** — Vevo and region-locked content is streamed through a residential proxy automatically; regular videos bypass it entirely.
 - **All formats** — three tabs: Video + Audio (pre-muxed up to 360p), Video Only (up to 4K, no audio), Audio Only (original language, all bitrates).
 - **No upload** — your video never leaves your device. ffmpeg runs locally via WebAssembly.
 - **Fast** — ffmpeg stream-copies both tracks (no re-encode), so muxing a 1 GB 4K file takes a few seconds.
