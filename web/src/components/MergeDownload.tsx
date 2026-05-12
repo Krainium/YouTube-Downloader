@@ -251,7 +251,7 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
           {videoFormats[0]?.qualityLabel ?? videoFormats[0]?.quality ?? "4K"}
         </span>.
         {hasDubbedTracks && (
-          <span className="text-purple-300/70"> Choose your audio language below.</span>
+          <span className="text-purple-300/70"> {langGroups.length} audio languages available.</span>
         )}
       </p>
 
@@ -279,25 +279,29 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
 
           <span className="text-xs text-muted shrink-0">+</span>
 
-          {/* Audio language selector — shown when dubbed tracks exist */}
-          {hasDubbedTracks ? (
-            <select
-              value={selectedLangId}
-              onChange={e => setSelectedLangId(e.target.value)}
-              disabled={isBusy}
-              aria-label="Audio language"
-              className="bg-card border border-purple-500/40 text-sm text-purple-200 rounded-lg px-3 py-2 flex-1 min-w-0 disabled:opacity-50"
-              style={{ maxWidth: 230 }}
-            >
-              {langGroups.map(g => (
+          {/* Audio language selector — always visible; one option for non-dubbed, all languages for dubbed */}
+          <select
+            value={selectedLangId}
+            onChange={e => setSelectedLangId(e.target.value)}
+            disabled={isBusy || !hasDubbedTracks}
+            aria-label="Audio language"
+            className={`text-sm rounded-lg px-3 py-2 flex-1 min-w-0 disabled:opacity-70 ${
+              hasDubbedTracks
+                ? "bg-card border border-purple-500/50 text-purple-200"
+                : "bg-card border border-border text-muted"
+            }`}
+            style={{ maxWidth: 230 }}
+          >
+            {hasDubbedTracks ? (
+              langGroups.map(g => (
                 <option key={g.id} value={g.id}>
                   {g.displayName}{g.isDefault ? " ✓" : ""}
                 </option>
-              ))}
-            </select>
-          ) : (
-            <span className="text-xs text-muted">best audio</span>
-          )}
+              ))
+            ) : (
+              <option value="original">Best audio</option>
+            )}
+          </select>
 
           <button
             onClick={handleMerge}

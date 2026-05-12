@@ -86,7 +86,7 @@ export default function Home() {
               <span className="text-accent">YouTube</span> video/Music
             </h1>
             <p className="text-sub text-sm sm:text-base max-w-md mx-auto leading-relaxed px-2">
-              Paste a URL below. Get every available format — MP4, WebM, M4A — direct from YouTube&apos;s servers. Works on Android &amp; iPhone.
+              Paste a URL below. Get every available format — MP4, WebM, M4A — direct from YouTube&apos;s servers. Works on all devices.
             </p>
           </div>
 
