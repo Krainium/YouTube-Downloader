@@ -179,7 +179,17 @@ function parseFormats(streaming: Record<string, unknown>): VideoFormat[] {
     type: "muxed" as const,
   }));
 
-  const adaptive: VideoFormat[] = adaptiveRaw.map((f) => ({
+  // For videos with dubbed audio tracks, YouTube returns the same itag many times
+  // (once per language). Each has an audioTrack field; only one has audioIsDefault=true
+  // (the original language). Drop all non-default dubbed tracks so the user always
+  // gets the original audio and the format list isn't flooded with duplicates.
+  const filteredAdaptive = adaptiveRaw.filter((f) => {
+    const audioTrack = f.audioTrack as Record<string, unknown> | undefined;
+    if (!audioTrack) return true;
+    return audioTrack.audioIsDefault === true;
+  });
+
+  const adaptive: VideoFormat[] = filteredAdaptive.map((f) => ({
     itag: f.itag as number,
     mimeType: f.mimeType as string,
     quality: f.quality as string,
