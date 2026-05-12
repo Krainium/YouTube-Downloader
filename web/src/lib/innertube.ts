@@ -191,12 +191,22 @@ function parseFormats(streaming: Record<string, unknown>): VideoFormat[] {
   const hasDubbedTracks = adaptiveRaw.some(
     (f) => (f.mimeType as string || "").startsWith("audio/") && f.audioTrack != null
   );
+  // Track seen (itag + audioTrack.id) pairs to drop YouTube's own duplicates.
+  // YouTube sometimes returns the same default audio track twice in the same
+  // adaptiveFormats list (identical lang=en-US.4 default=True entries).
+  const seenAudioKey = new Set<string>();
+
   const filteredAdaptive = adaptiveRaw.filter((f) => {
     const isAudio = (f.mimeType as string || "").startsWith("audio/");
     if (!isAudio || !hasDubbedTracks) return true;
     const audioTrack = f.audioTrack as Record<string, unknown> | undefined;
     if (!audioTrack) return false;
-    return audioTrack.audioIsDefault === true;
+    if (audioTrack.audioIsDefault !== true) return false;
+    // Deduplicate: keep only first occurrence of each (itag, lang) pair.
+    const key = `${f.itag}:${audioTrack.id ?? ""}`;
+    if (seenAudioKey.has(key)) return false;
+    seenAudioKey.add(key);
+    return true;
   });
 
   const adaptive: VideoFormat[] = filteredAdaptive.map((f) => ({
