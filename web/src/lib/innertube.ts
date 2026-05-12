@@ -183,9 +183,19 @@ function parseFormats(streaming: Record<string, unknown>): VideoFormat[] {
   // (once per language). Each has an audioTrack field; only one has audioIsDefault=true
   // (the original language). Drop all non-default dubbed tracks so the user always
   // gets the original audio and the format list isn't flooded with duplicates.
+  //
+  // Detection: if ANY adaptive format has an audioTrack field, this video has dubbed
+  // tracks. In that case, enforce audioIsDefault=true on ALL audio formats — some
+  // formats in the list may lack the audioTrack field entirely (they're lower-quality
+  // copies of a dubbed track), and we must drop those too.
+  const hasDubbedTracks = adaptiveRaw.some(
+    (f) => (f.mimeType as string || "").startsWith("audio/") && f.audioTrack != null
+  );
   const filteredAdaptive = adaptiveRaw.filter((f) => {
+    const isAudio = (f.mimeType as string || "").startsWith("audio/");
+    if (!isAudio || !hasDubbedTracks) return true;
     const audioTrack = f.audioTrack as Record<string, unknown> | undefined;
-    if (!audioTrack) return true;
+    if (!audioTrack) return false;
     return audioTrack.audioIsDefault === true;
   });
 
