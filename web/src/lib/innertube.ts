@@ -122,6 +122,12 @@ export interface VideoFormat {
   approxDurationMs?: string;
   url?: string;
   type: "muxed" | "video" | "audio";
+  /** Present on audio tracks from videos that have dubbed language tracks. */
+  audioTrack?: {
+    id: string;           // e.g. "en-US.4", "hi.10"
+    displayName: string;  // e.g. "English (US) original", "Hindi"
+    audioIsDefault: boolean;
+  };
 }
 
 export interface VideoInfo {
@@ -179,52 +185,45 @@ function parseFormats(streaming: Record<string, unknown>): VideoFormat[] {
     type: "muxed" as const,
   }));
 
-  // For videos with dubbed audio tracks, YouTube returns the same itag many times
-  // (once per language). Each has an audioTrack field; only one has audioIsDefault=true
-  // (the original language). Drop all non-default dubbed tracks so the user always
-  // gets the original audio and the format list isn't flooded with duplicates.
-  //
-  // Detection: if ANY adaptive format has an audioTrack field, this video has dubbed
-  // tracks. In that case, enforce audioIsDefault=true on ALL audio formats — some
-  // formats in the list may lack the audioTrack field entirely (they're lower-quality
-  // copies of a dubbed track), and we must drop those too.
-  const hasDubbedTracks = adaptiveRaw.some(
-    (f) => (f.mimeType as string || "").startsWith("audio/") && f.audioTrack != null
-  );
-  // Track seen (itag + audioTrack.id) pairs to drop YouTube's own duplicates.
-  // YouTube sometimes returns the same default audio track twice in the same
-  // adaptiveFormats list (identical lang=en-US.4 default=True entries).
+  // Deduplicate adaptive audio by (itag, audioTrack.id) — YouTube sometimes returns
+  // the same track twice. ALL dubbed languages are kept here; the UI layers decide
+  // which ones to surface (Smart Merge shows all, Audio Only tab shows default only).
   const seenAudioKey = new Set<string>();
-
   const filteredAdaptive = adaptiveRaw.filter((f) => {
     const isAudio = (f.mimeType as string || "").startsWith("audio/");
-    if (!isAudio || !hasDubbedTracks) return true;
-    const audioTrack = f.audioTrack as Record<string, unknown> | undefined;
-    if (!audioTrack) return false;
-    if (audioTrack.audioIsDefault !== true) return false;
-    // Deduplicate: keep only first occurrence of each (itag, lang) pair.
-    const key = `${f.itag}:${audioTrack.id ?? ""}`;
+    if (!isAudio) return true;
+    const at = f.audioTrack as Record<string, unknown> | undefined;
+    const key = `${f.itag as number}:${at?.id ?? ""}`;
     if (seenAudioKey.has(key)) return false;
     seenAudioKey.add(key);
     return true;
   });
 
-  const adaptive: VideoFormat[] = filteredAdaptive.map((f) => ({
-    itag: f.itag as number,
-    mimeType: f.mimeType as string,
-    quality: f.quality as string,
-    qualityLabel: f.qualityLabel as string | undefined,
-    bitrate: f.bitrate as number | undefined,
-    width: f.width as number | undefined,
-    height: f.height as number | undefined,
-    fps: f.fps as number | undefined,
-    contentLength: f.contentLength as string | undefined,
-    approxDurationMs: f.approxDurationMs as string | undefined,
-    url: f.url as string | undefined,
-    type: ((f.mimeType as string || "").startsWith("audio/") ? "audio" : "video") as "audio" | "video",
-  }));
+  const adaptive: VideoFormat[] = filteredAdaptive.map((f) => {
+    const isAudio = (f.mimeType as string || "").startsWith("audio/");
+    const at = f.audioTrack as Record<string, unknown> | undefined;
+    return {
+      itag: f.itag as number,
+      mimeType: f.mimeType as string,
+      quality: f.quality as string,
+      qualityLabel: f.qualityLabel as string | undefined,
+      bitrate: f.bitrate as number | undefined,
+      width: f.width as number | undefined,
+      height: f.height as number | undefined,
+      fps: f.fps as number | undefined,
+      contentLength: f.contentLength as string | undefined,
+      approxDurationMs: f.approxDurationMs as string | undefined,
+      url: f.url as string | undefined,
+      type: (isAudio ? "audio" : "video") as "audio" | "video",
+      audioTrack: at ? {
+        id: at.id as string,
+        displayName: at.displayName as string,
+        audioIsDefault: at.audioIsDefault as boolean,
+      } : undefined,
+    };
+  });
 
-  // Deduplicate by URL — multiple client fallbacks can return the same stream twice.
+  // Final dedup by URL — multiple client fallbacks can return identical streams.
   const seen = new Set<string>();
   return [...muxed, ...adaptive].filter((f) => {
     if (!f.url) return false;

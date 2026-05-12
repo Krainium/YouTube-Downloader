@@ -31,9 +31,15 @@ export default function FormatList({ info }: Props) {
     .filter(f => f.type === "video")
     .sort(byQuality);
 
-  const audioFormats = info.formats
+  // All audio formats including every dubbed language — passed to Smart Merge
+  // so users can pick which language to mux with the video.
+  const allAudioFormats = info.formats
     .filter(f => f.type === "audio")
     .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+
+  // Audio Only tab shows only the original/default-language tracks to keep it clean.
+  const audioFormats = allAudioFormats
+    .filter(f => !f.audioTrack || f.audioTrack.audioIsDefault);
 
   const current =
     tab === "muxed" ? muxedFormats :
@@ -99,7 +105,7 @@ export default function FormatList({ info }: Props) {
           <MergeDownload
             info={info}
             videoFormats={videoOnlyFormats}
-            audioFormats={audioFormats}
+            audioFormats={allAudioFormats}
           />
 
           <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
@@ -131,9 +137,11 @@ export default function FormatList({ info }: Props) {
           const codec = getCodec(fmt.mimeType);
           const size = fmt.contentLength ? humanSize(parseInt(fmt.contentLength)) : null;
           const isLoading = downloading === fmt.itag;
+          // Unique key: itag alone isn't unique when dubbed tracks share it
+          const fmtKey = `${fmt.itag}-${fmt.audioTrack?.id ?? ""}`;
 
           return (
-            <div key={fmt.itag} className="format-card rounded-xl p-3 sm:p-4 bg-card flex items-center justify-between gap-3 sm:gap-4">
+            <div key={fmtKey} className="format-card rounded-xl p-3 sm:p-4 bg-card flex items-center justify-between gap-3 sm:gap-4">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                   {(fmt.qualityLabel || fmt.quality) && (
