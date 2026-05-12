@@ -79,7 +79,7 @@ export default function Home() {
           <div className="text-center mb-8 sm:mb-10 animate-fade-in">
             <div className="inline-flex items-center gap-2 text-xs text-muted bg-card border border-border rounded-full px-4 py-1.5 mb-5 sm:mb-6 font-mono">
               <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-              Zero dependencies · All formats · Free forever
+              Zero dependencies · All formats · Free for now
             </div>
             <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-text mb-3 sm:mb-4 leading-none">
               Download any<br />
