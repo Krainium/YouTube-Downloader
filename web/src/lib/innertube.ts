@@ -185,21 +185,7 @@ function parseFormats(streaming: Record<string, unknown>): VideoFormat[] {
     type: "muxed" as const,
   }));
 
-  // Deduplicate adaptive audio by (itag, audioTrack.id) — YouTube sometimes returns
-  // the same track twice. ALL dubbed languages are kept here; the UI layers decide
-  // which ones to surface (Smart Merge shows all, Audio Only tab shows default only).
-  const seenAudioKey = new Set<string>();
-  const filteredAdaptive = adaptiveRaw.filter((f) => {
-    const isAudio = (f.mimeType as string || "").startsWith("audio/");
-    if (!isAudio) return true;
-    const at = f.audioTrack as Record<string, unknown> | undefined;
-    const key = `${f.itag as number}:${at?.id ?? ""}`;
-    if (seenAudioKey.has(key)) return false;
-    seenAudioKey.add(key);
-    return true;
-  });
-
-  const adaptive: VideoFormat[] = filteredAdaptive.map((f) => {
+  const adaptive: VideoFormat[] = adaptiveRaw.map((f) => {
     const isAudio = (f.mimeType as string || "").startsWith("audio/");
     const at = f.audioTrack as Record<string, unknown> | undefined;
     return {
@@ -223,14 +209,7 @@ function parseFormats(streaming: Record<string, unknown>): VideoFormat[] {
     };
   });
 
-  // Final dedup by URL — multiple client fallbacks can return identical streams.
-  const seen = new Set<string>();
-  return [...muxed, ...adaptive].filter((f) => {
-    if (!f.url) return false;
-    if (seen.has(f.url)) return false;
-    seen.add(f.url);
-    return true;
-  });
+  return [...muxed, ...adaptive].filter((f) => f.url);
 }
 
 function extractPlayerData(html: string): Record<string, unknown> | null {

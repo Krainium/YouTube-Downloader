@@ -102,14 +102,28 @@ export default function FormatList({ info }: Props) {
       {/* Video+Audio tab: Smart Merge panel + pre-muxed list */}
       {tab === "muxed" && (
         <>
-          <MergeDownload
-            info={info}
-            videoFormats={videoOnlyFormats}
-            audioFormats={allAudioFormats}
-          />
+          {videoOnlyFormats.length > 0 ? (
+            <MergeDownload
+              info={info}
+              videoFormats={videoOnlyFormats}
+              audioFormats={allAudioFormats}
+            />
+          ) : (
+            <div className="mb-4 rounded-xl border border-border bg-card/50 p-4 text-center">
+              <p className="text-sm text-muted">
+                Smart Merge unavailable — YouTube hasn&apos;t provided separate video and audio streams for this video.
+              </p>
+              <p className="text-xs text-muted/60 mt-1">
+                This is common for new uploads or some channel types. Only the pre-combined file below is available.
+              </p>
+            </div>
+          )}
 
           <p className="text-xs text-muted mb-3 px-1 leading-relaxed">
-            Or grab a pre-combined file below (up to <span className="text-sub">360p</span>).
+            {videoOnlyFormats.length > 0
+              ? <>Or grab a pre-combined file below (up to <span className="text-sub">360p</span>).</>
+              : <>Pre-combined file (up to <span className="text-sub">360p</span>):</>
+            }
           </p>
         </>
       )}
