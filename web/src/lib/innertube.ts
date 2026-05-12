@@ -783,13 +783,23 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   let coreInfo: Omit<VideoInfo, "proxied"> | null = null;
   let usedProxy = false;
 
+  // Returns true when a result has at least one adaptive (video-only or audio-only) format.
+  // Muxed-only results are saved as a fallback but we keep trying for adaptive streams.
+  function hasAdaptive(info: Omit<VideoInfo, "proxied">): boolean {
+    return info.formats.some(f => f.type === "video" || f.type === "audio");
+  }
+
   // ── Phase 1: Direct fetch (no proxy) ─────────────────────────────────────
-  // CDN URLs will be bound to Vercel's IP, so the stream route can proxy from
-  // the same network without needing the ISP proxy at all.
+  // Keep trying all clients even after getting a muxed-only result — a later
+  // client (e.g. WEB with session cookies) may return adaptive streams.
   for (const client of directClients) {
     try {
       const info = await fetchViaInnertube(videoId, client, false);
-      if (info.formats.length > 0) { coreInfo = info; usedProxy = false; break; }
+      if (info.formats.length > 0) {
+        const better = !coreInfo || hasAdaptive(info);
+        if (better) { coreInfo = info; usedProxy = false; }
+        if (hasAdaptive(info)) break; // got adaptive streams — no need to try more
+      }
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       lastErr = e;
@@ -798,11 +808,16 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   }
 
   // ── Phase 2: Proxy fetch (restricted / label-blocked content) ────────────
-  if (!coreInfo && process.env.PROXY_URL) {
+  // Run when we have no result yet, OR when we only have muxed-only so far.
+  if ((!coreInfo || !hasAdaptive(coreInfo)) && process.env.PROXY_URL) {
     for (const client of proxyClients) {
       try {
         const info = await fetchViaInnertube(videoId, client, true);
-        if (info.formats.length > 0) { coreInfo = info; usedProxy = true; break; }
+        if (info.formats.length > 0) {
+          const better = !coreInfo || hasAdaptive(info);
+          if (better) { coreInfo = info; usedProxy = true; }
+          if (hasAdaptive(info)) break;
+        }
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         lastErr = e;
@@ -812,12 +827,16 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   }
 
   // ── Phase 3: Page-scrape fallback ────────────────────────────────────────
-  if (!coreInfo) {
+  if (!coreInfo || !hasAdaptive(coreInfo)) {
     for (const useProxy of [false, true]) {
       if (useProxy && !process.env.PROXY_URL) continue;
       try {
         const info = await fetchViaPageScrape(videoId, useProxy);
-        if (info.formats.length > 0) { coreInfo = info; usedProxy = useProxy; break; }
+        if (info.formats.length > 0) {
+          const better = !coreInfo || hasAdaptive(info);
+          if (better) { coreInfo = info; usedProxy = useProxy; }
+          if (hasAdaptive(info)) break;
+        }
       } catch { /* try next */ }
     }
   }
