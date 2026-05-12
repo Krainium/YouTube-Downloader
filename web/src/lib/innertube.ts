@@ -204,7 +204,14 @@ function parseFormats(streaming: Record<string, unknown>): VideoFormat[] {
     type: ((f.mimeType as string || "").startsWith("audio/") ? "audio" : "video") as "audio" | "video",
   }));
 
-  return [...muxed, ...adaptive].filter((f) => f.url);
+  // Deduplicate by URL — multiple client fallbacks can return the same stream twice.
+  const seen = new Set<string>();
+  return [...muxed, ...adaptive].filter((f) => {
+    if (!f.url) return false;
+    if (seen.has(f.url)) return false;
+    seen.add(f.url);
+    return true;
+  });
 }
 
 function extractPlayerData(html: string): Record<string, unknown> | null {
