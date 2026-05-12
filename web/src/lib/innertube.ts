@@ -37,11 +37,12 @@ async function proxyFetch(
   const proxy = new URL(proxyUrl);
   const target = new URL(targetUrl);
 
-  // Dynamic imports — safe in Node.js server context, ignored by webpack on client.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const http = require("node:http") as typeof import("http");
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const tls  = require("node:tls")  as typeof import("tls");
+  // webpackIgnore prevents webpack from bundling Node.js built-ins.
+  // These are only called at runtime inside server API routes (never in the browser).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const http = await import(/* webpackIgnore: true */ "node:http") as any as typeof import("http");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tls  = await import(/* webpackIgnore: true */ "node:tls")  as any as typeof import("tls");
 
   return new Promise<ProxyResponse>((resolve, reject) => {
     const proxyAuth = Buffer.from(
