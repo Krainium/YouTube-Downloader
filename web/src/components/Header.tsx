@@ -32,7 +32,7 @@ export default function Header() {
           {/* Logo — clicking reloads the main page */}
           <a
             href="/"
-            aria-label="YTDL home"
+            aria-label="Youtube Downloader home"
             className="flex items-center gap-3 hover:opacity-80 transition-opacity"
           >
             <div className="relative">
@@ -44,8 +44,8 @@ export default function Header() {
               </svg>
             </div>
             <div>
-              <span className="font-mono text-xl font-black tracking-wider">
-                <span className="text-accent">YT</span>DL
+              <span className="font-mono text-lg sm:text-xl font-black tracking-wide whitespace-nowrap">
+                <span className="text-accent">Youtube</span> Downloader
               </span>
               <span className="hidden sm:inline text-muted text-xs ml-2 font-mono">v2.0</span>
             </div>
