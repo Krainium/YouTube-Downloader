@@ -39,11 +39,11 @@ export default function SplashScreen({ onDone }: { onDone: () => void }) {
       </div>
 
       {/* Title */}
-      <h1 className="font-mono text-4xl font-black tracking-widest text-text mb-1 relative z-10">
-        <span className="text-accent">YT</span>DL
+      <h1 className="font-mono text-3xl sm:text-4xl font-black tracking-tight text-text mb-2 relative z-10 text-center px-4">
+        <span className="text-accent">Youtube</span> Downloader
       </h1>
-      <p className="text-sub text-sm tracking-[0.3em] uppercase mb-12 relative z-10">
-        YouTube Downloader
+      <p className="text-sub text-xs tracking-[0.3em] uppercase mb-12 relative z-10">
+        Free · No Sign-in · No Limits
       </p>
 
       {/* Progress bar */}

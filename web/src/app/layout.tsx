@@ -1,8 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
-const SITE_URL = "https://ytdl-web-zeta.vercel.app";
-const SITE_NAME = "YTDL — YouTube Downloader";
+const SITE_URL = "https://youtubeone.vercel.app";
+const SITE_NAME = "Youtube Downloader";
 const DESCRIPTION =
   "Download any YouTube video or audio in full quality — MP4 up to 4K, M4A, WebM. Free, no sign-in, no limits. Works on Android, iPhone, PC and Mac.";
 
@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
     default: SITE_NAME,
-    template: `%s | YTDL`,
+    template: `%s | Youtube Downloader`,
   },
   description: DESCRIPTION,
   keywords: [
@@ -43,7 +43,7 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: "Krainium", url: "https://github.com/Krainium" }],
   creator: "Krainium",
-  publisher: "YTDL",
+  publisher: "Youtube Downloader",
   robots: {
     index: true,
     follow: true,
@@ -64,7 +64,7 @@ export const metadata: Metadata = {
         url: `${SITE_URL}/og-image.svg`,
         width: 1200,
         height: 630,
-        alt: "YTDL — Free YouTube Video Downloader",
+        alt: "Youtube Downloader — Free YouTube Video Downloader",
       },
     ],
   },
@@ -92,7 +92,7 @@ const jsonLd = {
     {
       "@type": "WebApplication",
       "@id": `${SITE_URL}/#webapp`,
-      name: "YTDL",
+      name: "Youtube Downloader",
       url: SITE_URL,
       description: DESCRIPTION,
       applicationCategory: "MultimediaApplication",
@@ -121,7 +121,7 @@ const jsonLd = {
       "@type": "WebSite",
       "@id": `${SITE_URL}/#website`,
       url: SITE_URL,
-      name: "YTDL",
+      name: "Youtube Downloader",
       description: DESCRIPTION,
       publisher: { "@id": `${SITE_URL}/#webapp` },
       potentialAction: {
@@ -151,18 +151,18 @@ const jsonLd = {
         },
         {
           "@type": "Question",
-          name: "Is YTDL free to use?",
+          name: "Is Youtube Downloader free to use?",
           acceptedAnswer: {
             "@type": "Answer",
-            text: "Yes. YTDL is completely free with no sign-in, no file size limits, and no daily caps.",
+            text: "Yes. Youtube Downloader is completely free with no sign-in, no file size limits, and no daily caps.",
           },
         },
         {
           "@type": "Question",
-          name: "Does YTDL work on Android and iPhone?",
+          name: "Does Youtube Downloader work on Android and iPhone?",
           acceptedAnswer: {
             "@type": "Answer",
-            text: "Yes. YTDL works fully in the mobile browser on Android (Chrome) and iPhone/iPad (Safari). No app download required.",
+            text: "Yes. Youtube Downloader works fully in the mobile browser on Android (Chrome) and iPhone/iPad (Safari). No app download required.",
           },
         },
         {
