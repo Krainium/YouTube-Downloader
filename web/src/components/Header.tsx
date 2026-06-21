@@ -1,8 +1,33 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 const TICKER_TEXT = "✦  Pricing coming soon  ✦  Pricing coming soon  ✦  Pricing coming soon  ✦  Pricing coming soon  ✦  Pricing coming soon  ✦  Pricing coming soon  ✦";
 
 export default function Header() {
+  // Live proxy health: null = checking, true = reachable, false = offline.
+  // Pings /api/health (which tests the configured PROXY_URL) once on load,
+  // then every hour. Any failure flips the indicator to Offline.
+  const [online, setOnline] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      try {
+        const r = await fetch("/api/health", { cache: "no-store" });
+        const j = await r.json();
+        if (alive) setOnline(!!j.online);
+      } catch {
+        if (alive) setOnline(false);
+      }
+    };
+    check();
+    const id = setInterval(check, 60 * 60 * 1000); // every 1 hour
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
   return (
     <header className="relative z-10 sticky top-0">
       {/* Animated ticker strip */}
@@ -66,10 +91,20 @@ export default function Header() {
             </a>
           </div>
 
-          {/* Status pill */}
+          {/* Status pill — reflects live proxy health (polled hourly) */}
           <div className="flex items-center gap-2 text-xs text-sub">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="hidden sm:inline">Online</span>
+            <span
+              className={`w-2 h-2 rounded-full ${
+                online === null
+                  ? "bg-yellow-500 animate-pulse"
+                  : online
+                  ? "bg-green-500 animate-pulse"
+                  : "bg-red-500"
+              }`}
+            />
+            <span className="hidden sm:inline">
+              {online === null ? "Checking…" : online ? "Online" : "Offline"}
+            </span>
           </div>
         </div>
       </div>
