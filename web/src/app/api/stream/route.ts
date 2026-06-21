@@ -40,12 +40,12 @@ export async function GET(req: NextRequest) {
     const decoded = decodeURIComponent(streamUrl);
     const fetchFn = await buildFetch(proxied);
 
-    // With params=2AMB (innertube.ts), all formats have ratebypass=yes and
-    // the CDN URL's ip= is signed for the calling server's own IP.
-    // Direct fetch (no proxy) returns 200 for all formats in normal operation.
-    // The proxy path is a safety net for the rare case where the direct
-    // player API call was bot-blocked and fell back to the ISP proxy.
-    const upstream = await fetchFn(decoded, {
+    // With params=2AMB (innertube.ts), all formats have ratebypass=yes and the
+    // CDN URL's ip= is signed for the calling server's (or proxy's) own IP.
+    // Residential proxies are flaky and a freshly-rotated exit can transiently
+    // 403 or drop the connection, so retry a few times before giving up — each
+    // attempt re-establishes the proxy connection.
+    const reqInit = {
       redirect: "follow",
       headers: {
         "User-Agent": ANDROID_UA,
@@ -54,12 +54,28 @@ export async function GET(req: NextRequest) {
         "Accept-Encoding": "identity",
         "Origin": "https://www.youtube.com",
       },
-    } as RequestInit);
+    } as RequestInit;
 
-    if (!upstream.ok || !upstream.body) {
+    const MAX_TRIES = 4;
+    let upstream: Response | null = null;
+    let lastStatus = 0;
+    for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+      try {
+        const r = await fetchFn(decoded, reqInit);
+        if (r.ok && r.body) { upstream = r; break; }
+        lastStatus = r.status;
+      } catch {
+        lastStatus = 0; // network-level failure (reset/timeout)
+      }
+      if (attempt < MAX_TRIES) {
+        await new Promise((res) => setTimeout(res, 400 * attempt));
+      }
+    }
+
+    if (!upstream || !upstream.ok || !upstream.body) {
       return NextResponse.json(
-        { error: `CDN returned ${upstream.status}` },
-        { status: upstream.status === 403 ? 403 : 502 }
+        { error: `CDN returned ${lastStatus || "no response"}` },
+        { status: lastStatus === 403 ? 403 : 502 }
       );
     }
 
