@@ -894,54 +894,50 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
     return info.formats.some(f => f.type === "video" || f.type === "audio");
   }
 
-  // ── Phase 1: Direct fetch (no proxy) ─────────────────────────────────────
-  // Keep trying all clients even after getting a muxed-only result — a later
-  // client (e.g. WEB with session cookies) may return adaptive streams.
-  for (const client of directClients) {
-    try {
-      const info = await fetchViaInnertube(videoId, client, false);
-      if (info.formats.length > 0) {
-        const better = !coreInfo || hasAdaptive(info);
-        if (better) { coreInfo = info; usedProxy = false; }
-        if (hasAdaptive(info)) break; // got adaptive streams — no need to try more
-      }
-    } catch (err) {
-      const e = err instanceof Error ? err : new Error(String(err));
-      lastErr = e;
-      if (!shouldTryNext(e.message)) throw e;
-    }
-  }
+  // When a residential PROXY_URL is configured, lead with it: from datacenter
+  // hosts (e.g. Vercel) the direct path is always bot-blocked by YouTube, so
+  // trying the proxy first avoids ~1.5s of guaranteed-failing direct calls.
+  const proxyConfigured = !!process.env.PROXY_URL;
 
-  // ── Phase 2: Proxy fetch (restricted / label-blocked content) ────────────
-  // Run when we have no result yet, OR when we only have muxed-only so far.
-  // Always continue to the next client on error — a proxy network error on one
-  // client should not stop the remaining clients from being tried.
-  if ((!coreInfo || !hasAdaptive(coreInfo)) && process.env.PROXY_URL) {
-    for (const client of proxyClients) {
+  // Run a client list; updates coreInfo/usedProxy via closure. Returns early
+  // once an adaptive (video-only or audio-only) result is found, or the content
+  // is genuinely unavailable, so the remaining clients are skipped.
+  async function runClients(clients: YoutubeClient[], useProxy: boolean): Promise<void> {
+    for (const client of clients) {
       try {
-        const info = await fetchViaInnertube(videoId, client, true);
+        const info = await fetchViaInnertube(videoId, client, useProxy);
         if (info.formats.length > 0) {
           const better = !coreInfo || hasAdaptive(info);
-          if (better) { coreInfo = info; usedProxy = true; }
-          if (hasAdaptive(info)) break;
+          if (better) { coreInfo = info; usedProxy = useProxy; }
+          if (hasAdaptive(info)) return; // got adaptive streams — no need to try more
         }
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         lastErr = e;
-        // Only hard-stop on genuine "content unavailable" errors, not network/proxy failures.
         const m = e.message.toLowerCase();
         const isContentError = m.includes("video unavailable") || m.includes("private video") ||
           m.includes("has been removed") || m.includes("not available in your country");
-        if (isContentError) break;
-        // Everything else (login required, bot, api error, proxy error) → try next client.
+        if (isContentError) return;
+        // Direct path: a non-retryable error is fatal. Proxy path: always advance
+        // to the next client (a proxy/network error must not stop the others).
+        if (!useProxy && !shouldTryNext(e.message)) throw e;
       }
     }
   }
 
+  // ── Phase 1: Proxy fetch (primary on datacenter hosts) ───────────────────
+  if (proxyConfigured) {
+    await runClients(proxyClients, true);
+  }
+
+  // ── Phase 2: Direct fetch (fallback, or sole path when no proxy is set) ───
+  if (!coreInfo || !hasAdaptive(coreInfo)) {
+    await runClients(directClients, false);
+  }
+
   // ── Phase 3: Page-scrape fallback ────────────────────────────────────────
   if (!coreInfo || !hasAdaptive(coreInfo)) {
-    for (const useProxy of [false, true]) {
-      if (useProxy && !process.env.PROXY_URL) continue;
+    for (const useProxy of (proxyConfigured ? [true, false] : [false])) {
       try {
         const info = await fetchViaPageScrape(videoId, useProxy);
         if (info.formats.length > 0) {
