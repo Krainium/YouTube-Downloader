@@ -6,7 +6,7 @@ Hits YouTube's internal Innertube API the same way the official apps do. Pulls e
 
 ---
 
-## Web App — [ytdl-web-zeta.vercel.app](https://ytdl-web-zeta.vercel.app/)
+## Web App — [youtubeone.vercel.app](https://youtubeone.vercel.app)
 
 A privacy-first YouTube downloader that runs entirely in your browser. No sign-in, no tracking, no file upload.
 
