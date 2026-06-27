@@ -29,4 +29,4 @@ Allow: /
 # Block only internal API paths from indexing
 Disallow: /api/
 
-Sitemap: https://ytdl-web-zeta.vercel.app/sitemap.xml
+Sitemap: https://youtubeone.vercel.app/sitemap.xml
