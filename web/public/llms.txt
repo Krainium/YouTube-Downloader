@@ -23,7 +23,7 @@ YTDL lets you download any YouTube video directly. Paste a URL, choose a format,
 
 ## How to use
 
-1. Open https://ytdl-web-zeta.vercel.app
+1. Open https://youtubeone.vercel.app/
 2. Paste a YouTube video URL into the input field
 3. Click "Analyze & Get Formats"
 4. Select a tab: Video + Audio / Video Only / Audio Only
@@ -51,4 +51,4 @@ https://github.com/Krainium/youtube (web/ subdirectory)
 
 ## URL
 
-https://ytdl-web-zeta.vercel.app
+https://youtubeone.vercel.app/
