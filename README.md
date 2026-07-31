@@ -10,7 +10,9 @@ Hits YouTube's internal Innertube API the same way the official apps do. Pulls e
 
 A privacy-first YouTube downloader that runs entirely in your browser. No sign-in, no tracking, no file upload.
 
-![Web app](frontend.png)
+![Web app](frontend1.png)
+
+![Formats and dubbed audio picker](frontend.png)
 
 ### Features
 
