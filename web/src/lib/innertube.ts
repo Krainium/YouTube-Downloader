@@ -950,9 +950,9 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
   }
 
   // Lead with the pool; the direct path is bot-blocked from datacenter hosts.
-  // Only a couple of exits are tried — walking all of them would outlast the
-  // function's time budget.
-  const MAX_EXIT_ATTEMPTS = 2;
+  // Not every exit clears YouTube's bot check, so try a few before giving up —
+  // but not the whole pool, which would outlast the function's time budget.
+  const MAX_EXIT_ATTEMPTS = 3;
   const exits = vlessEnabled() ? shuffledNodes().slice(0, MAX_EXIT_ATTEMPTS) : [];
 
   // Run a client list against one exit (or directly when node is null).
