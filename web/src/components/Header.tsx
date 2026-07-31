@@ -6,7 +6,7 @@ const TICKER_TEXT = "✦  Pricing coming soon  ✦  Pricing coming soon  ✦  Pr
 
 export default function Header() {
   // Live proxy health: null = checking, true = reachable, false = offline.
-  // Pings /api/health (which tests the configured PROXY_URL) once on load,
+  // Pings /api/health (which tests the VLESS exit pool) once on load,
   // then every hour. Any failure flips the indicator to Offline.
   const [online, setOnline] = useState<boolean | null>(null);
   useEffect(() => {
