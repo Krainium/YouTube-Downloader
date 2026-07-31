@@ -47,7 +47,7 @@ No data leaves your device except to YouTube's CDN.
 
 ## Source code
 
-https://github.com/Krainium/youtube (web/ subdirectory)
+https://github.com/Krainium/YouTube-Downloader (web/ subdirectory)
 
 ## URL
 
