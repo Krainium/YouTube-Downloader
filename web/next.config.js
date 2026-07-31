@@ -1,5 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Emits .next/standalone/server.js so the container can run the app without
+  // the full node_modules tree. Required by Dockerfile.vercel.
+  output: "standalone",
+
   serverExternalPackages: ["undici"],
 
   webpack: (config, { isServer, webpack }) => {
