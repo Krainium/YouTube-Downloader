@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { proxyUrlFor } from "@/lib/vless";
 
 export const runtime = "nodejs";
 
@@ -6,15 +7,14 @@ export const runtime = "nodejs";
 const ANDROID_UA =
   "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip";
 
-// Build a fetch function that routes through PROXY_URL when proxied=true.
-// Uses undici ProxyAgent (Node.js 18+ built-in, available in Vercel Edge).
-async function buildFetch(useProxy: boolean): Promise<typeof fetch> {
-  if (!useProxy || !process.env.PROXY_URL) return fetch;
+// Fetch pinned to one VLESS exit, via undici ProxyAgent.
+async function buildFetch(proxyUrl: string | null): Promise<typeof fetch> {
+  if (!proxyUrl) return fetch;
   try {
     // webpackIgnore tells webpack to skip static analysis of this import.
     // @ts-ignore – undici resolved at runtime by Node; not in local TS paths
     const { ProxyAgent, fetch: undiciFetch } = await import(/* webpackIgnore: true */ "undici") as any;
-    const agent = new ProxyAgent(process.env.PROXY_URL);
+    const agent = new ProxyAgent(proxyUrl);
     return (url: RequestInfo | URL, init?: RequestInit) =>
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       undiciFetch(url as string, { ...init, dispatcher: agent } as any);
@@ -27,18 +27,29 @@ export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const streamUrl = searchParams.get("url");
   const filename = searchParams.get("filename") || "download";
-  // proxied=1 means the CDN URL's ip= param is bound to the proxy IP.
-  // In that (rare) fallback case we must route the CDN fetch through the
-  // same proxy so the IPs match and YouTube serves the content.
+  // proxied=1 means the CDN URL is bound to a VLESS exit; node says which one.
+  // The bytes must come through that same exit or the CDN answers 403.
   const proxied = searchParams.get("proxied") === "1";
+  const nodeParam = searchParams.get("node");
+  const node = nodeParam === null ? NaN : Number(nodeParam);
 
   if (!streamUrl) {
     return NextResponse.json({ error: "stream url required" }, { status: 400 });
   }
+  if (proxied && !Number.isInteger(node)) {
+    return NextResponse.json(
+      { error: "node is required when proxied=1" },
+      { status: 400 }
+    );
+  }
 
   try {
     const decoded = decodeURIComponent(streamUrl);
-    const fetchFn = await buildFetch(proxied);
+    const proxyUrl = proxied ? proxyUrlFor(node) : null;
+    if (proxied && !proxyUrl) {
+      return NextResponse.json({ error: `unknown exit ${node}` }, { status: 400 });
+    }
+    const fetchFn = await buildFetch(proxyUrl);
 
     // With params=2AMB (innertube.ts), all formats have ratebypass=yes and the
     // CDN URL's ip= is signed for the calling server's (or proxy's) own IP.

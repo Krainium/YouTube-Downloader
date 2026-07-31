@@ -70,11 +70,17 @@ const (
 
 type innertubeRequest struct {
         VideoID        string       `json:"videoId,omitempty"`
+        Params         string       `json:"params,omitempty"`
         Context        innertubeCtx `json:"context"`
         PlaybackCtx    *playbackCtx `json:"playbackContext,omitempty"`
         ContentCheckOK bool         `json:"contentCheckOk,omitempty"`
         RacyCheckOK    bool         `json:"racyCheckOk,omitempty"`
 }
+
+// paramsOffline is protobuf field 59 = 1, signalling offline/download mode.
+// YouTube then returns ratebypass=yes on every adaptive format; without it
+// the CDN throttles the stream to ~10 KB/s a few hundred KB in.
+const paramsOffline = "2AMB"
 
 type innertubeCtx struct {
         Client innertubeClientCtx `json:"client"`
@@ -411,6 +417,7 @@ func (c *InnertubeClient) callPlayer(videoID string, cl ClientInfo) (*PlayerResp
 
         body := innertubeRequest{
                 VideoID:        videoID,
+                Params:         paramsOffline,
                 ContentCheckOK: true,
                 RacyCheckOK:    true,
                 Context: innertubeCtx{

@@ -1,3 +1,5 @@
+import { proxyUrlFor, shuffledNodes, vlessEnabled } from "./vless";
+
 // ---------------------------------------------------------------------------
 // Proxy fetch — native Node.js HTTPS-over-HTTP-CONNECT tunnel.
 // Replaces undici ProxyAgent which silently falls back to direct fetch when
@@ -32,9 +34,9 @@ function unchunkBuffer(data: Buffer): Buffer {
 async function proxyFetch(
   targetUrl: string,
   init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+  proxyUrl?: string,
 ): Promise<ProxyResponse> {
-  const proxyUrl = process.env.PROXY_URL;
-  if (!proxyUrl) throw new Error("PROXY_URL not set");
+  if (!proxyUrl) throw new Error("no proxy configured for this request");
 
   const proxy = new URL(proxyUrl);
   const target = new URL(targetUrl);
@@ -46,7 +48,32 @@ async function proxyFetch(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tls  = await import(/* webpackIgnore: true */ "node:tls")  as any as typeof import("tls");
 
-  return new Promise<ProxyResponse>((resolve, reject) => {
+  return new Promise<ProxyResponse>((resolveRaw, rejectRaw) => {
+    // Covers CONNECT, handshake and response read: a half-dead exit could
+    // otherwise hang past the function's budget.
+    const DEADLINE_MS = Number(process.env.PROXY_TIMEOUT_MS || 20_000);
+    let settled = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let openSockets: any[] = [];
+
+    const deadline = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      openSockets.forEach((s) => { try { s.destroy(); } catch { /* already gone */ } });
+      rejectRaw(new Error("proxy-timeout"));
+    }, DEADLINE_MS);
+
+    const resolve = (v: ProxyResponse) => {
+      if (settled) return;
+      settled = true; clearTimeout(deadline); resolveRaw(v);
+    };
+    const reject = (e: Error) => {
+      if (settled) return;
+      settled = true; clearTimeout(deadline);
+      openSockets.forEach((s) => { try { s.destroy(); } catch { /* already gone */ } });
+      rejectRaw(e);
+    };
+
     const proxyAuth = Buffer.from(
       `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`
     ).toString("base64");
@@ -66,10 +93,52 @@ async function proxyFetch(
     connectReq.on("error", reject);
 
     connectReq.on("connect", (res, socket) => {
+      openSockets.push(socket);
       if ((res.statusCode ?? 0) !== 200) {
         socket.destroy();
         return reject(new Error(`proxy-connect-failed:${res.statusCode}`));
       }
+
+      const bufChunks: Buffer[] = [];
+
+      // XTLS Vision does not always close with a clean close_notify, so Node's
+      // TLS layer can raise "bad record mac" after the full response arrived.
+      // Treat that as end-of-stream when the body is complete.
+      const finish = (cause?: Error) => {
+        const rawBuf  = Buffer.concat(bufChunks);
+        // Locate header/body boundary at byte level.
+        const sepIdx  = rawBuf.indexOf(Buffer.from("\r\n\r\n"));
+        if (sepIdx === -1) return reject(cause ?? new Error("proxy-bad-response"));
+
+        const headersStr = rawBuf.slice(0, sepIdx).toString("ascii");
+        const firstLine  = headersStr.slice(0, headersStr.indexOf("\r\n"));
+        const statusCode = Number(firstLine.split(" ")[1] ?? "0");
+        const hdrsLower  = headersStr.toLowerCase();
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let bodyBuf: Buffer = rawBuf.slice(sepIdx + 4) as any;
+        const chunked = hdrsLower.includes("transfer-encoding: chunked");
+        const lenHdr  = headersStr.match(/content-length:\s*(\d+)/i);
+
+        if (cause) {
+          const complete = chunked
+            ? rawBuf.includes(Buffer.from("\r\n0\r\n"))       // terminating chunk
+            : lenHdr ? bodyBuf.length >= Number(lenHdr[1]) : bodyBuf.length > 0;
+          if (!complete) return reject(cause);
+        }
+
+        // Decode chunked encoding at Buffer level — chunk sizes are byte counts,
+        // NOT JavaScript string character counts (important for multi-byte UTF-8).
+        if (chunked) bodyBuf = unchunkBuffer(bodyBuf);
+
+        const body = bodyBuf.toString("utf8");
+        resolve({
+          ok:     statusCode >= 200 && statusCode < 300,
+          status: statusCode,
+          text:   async () => body,
+          json:   async () => JSON.parse(body),
+        });
+      };
 
       // Step 2 — TLS handshake over the raw tunnel socket.
       const tlsSock = tls.connect(
@@ -93,41 +162,15 @@ async function proxyFetch(
 
           tlsSock.write(reqStr);
           if (bodyBuf.length > 0) tlsSock.write(bodyBuf);
-
-          // Step 4 — collect the response as raw bytes.
-          const bufChunks: Buffer[] = [];
-          tlsSock.on("data", (c: Buffer) => bufChunks.push(c));
-          tlsSock.on("error", reject);
-          tlsSock.on("end", () => {
-            const rawBuf  = Buffer.concat(bufChunks);
-            // Locate header/body boundary at byte level.
-            const sepIdx  = rawBuf.indexOf(Buffer.from("\r\n\r\n"));
-            if (sepIdx === -1) return reject(new Error("proxy-bad-response"));
-
-            const headersStr = rawBuf.slice(0, sepIdx).toString("ascii");
-            const firstLine  = headersStr.slice(0, headersStr.indexOf("\r\n"));
-            const statusCode = Number(firstLine.split(" ")[1] ?? "0");
-            const hdrsLower  = headersStr.toLowerCase();
-
-            // Decode chunked encoding at Buffer level — chunk sizes are byte counts,
-            // NOT JavaScript string character counts (important for multi-byte UTF-8).
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            let bodyBuf: Buffer = rawBuf.slice(sepIdx + 4) as any;
-            if (hdrsLower.includes("transfer-encoding: chunked")) {
-              bodyBuf = unchunkBuffer(bodyBuf);
-            }
-
-            const body = bodyBuf.toString("utf8");
-            resolve({
-              ok:     statusCode >= 200 && statusCode < 300,
-              status: statusCode,
-              text:   async () => body,
-              json:   async () => JSON.parse(body),
-            });
-          });
         },
       );
-      tlsSock.on("error", reject);
+
+      // Step 4 — collect the response. One error handler only: a second one
+      // would pre-empt finish() and reject a response that already arrived.
+      openSockets.push(tlsSock);
+      tlsSock.on("data", (c: Buffer) => bufChunks.push(c));
+      tlsSock.on("error", (err: Error) => finish(err));
+      tlsSock.on("end", () => finish());
     });
 
     connectReq.end();
@@ -250,7 +293,12 @@ export interface VideoInfo {
   formats: VideoFormat[];
   /** true when CDN URLs are bound to the proxy IP; stream route must also proxy */
   proxied?: boolean;
+  /** Which VLESS exit produced these URLs; /api/stream must reuse it. */
+  node?: number;
 }
+
+/** What the fetch strategies return, before exit/proxy bookkeeping is attached. */
+type CoreInfo = Omit<VideoInfo, "proxied" | "node">;
 
 function extractVideoId(input: string): string | null {
   try {
@@ -355,7 +403,7 @@ function getScrapeHeaders(): Record<string, string> {
   };
 }
 
-async function fetchViaPageScrape(videoId: string, useProxy = true): Promise<Omit<VideoInfo, "proxied">> {
+async function fetchViaPageScrape(videoId: string, proxyUrl?: string): Promise<CoreInfo> {
   const urls = [
     `https://www.youtube.com/watch?v=${videoId}&hl=en&gl=US`,
     `https://www.youtube.com/watch?v=${videoId}&hl=en&gl=US&bpctr=9999999999&has_verified=1`,
@@ -367,8 +415,8 @@ async function fetchViaPageScrape(videoId: string, useProxy = true): Promise<Omi
 
   for (const pageUrl of urls) {
     try {
-      const res: ProxyResponse = useProxy && process.env.PROXY_URL
-        ? await proxyFetch(pageUrl, { headers: getScrapeHeaders() })
+      const res: ProxyResponse = proxyUrl
+        ? await proxyFetch(pageUrl, { headers: getScrapeHeaders() }, proxyUrl)
         : await fetch(pageUrl, { headers: getScrapeHeaders() })
             .then(r => ({ ok: r.ok, status: r.status, text: () => r.text(), json: () => r.json() }));
       if (!res.ok) { lastError = `HTTP ${res.status} from ${pageUrl}`; continue; }
@@ -553,20 +601,24 @@ function extractJsonObject(str: string): string | null {
   return null;
 }
 
-async function getVisitorData(): Promise<string> {
+async function getVisitorData(proxyUrl?: string): Promise<string> {
   const now = Date.now();
   if (_cachedVisitorId && now - _cachedVisitorIdAt < VISITOR_ID_MAX_AGE_MS) {
     return _cachedVisitorId;
   }
   try {
-    const res = await fetch("https://www.youtube.com", {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-    });
+    const headers = {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    };
+    // Same exit as the caller. Unproxied, YouTube stalls rather than refuses,
+    // and fetch() has no default timeout — so cap the wait.
+    const res: ProxyResponse = proxyUrl
+      ? await proxyFetch("https://www.youtube.com", { headers }, proxyUrl)
+      : await fetch("https://www.youtube.com", { headers, signal: AbortSignal.timeout(8_000) })
+          .then(r => ({ ok: r.ok, status: r.status, text: () => r.text(), json: () => r.json() }));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
 
@@ -610,9 +662,9 @@ type YoutubeClient = {
   isWebClient?: true;
 };
 
-async function fetchViaInnertube(videoId: string, client: YoutubeClient, useProxy = true): Promise<Omit<VideoInfo, "proxied">> {
+async function fetchViaInnertube(videoId: string, client: YoutubeClient, proxyUrl?: string): Promise<CoreInfo> {
   // Use real YouTube-issued visitor ID (technique from kkdai/youtube).
-  const visitorData = await getVisitorData();
+  const visitorData = await getVisitorData(proxyUrl);
 
   // key= is intentionally empty for ANDROID_VR (matches kkdai/youtube behavior).
   const apiUrl = `https://www.youtube.com/youtubei/v1/player?key=${client.apiKey}&prettyPrint=false`;
@@ -696,8 +748,8 @@ async function fetchViaInnertube(videoId: string, client: YoutubeClient, useProx
     }
   }
 
-  const res: ProxyResponse = useProxy && process.env.PROXY_URL
-    ? await proxyFetch(apiUrl, { method: "POST", headers, body: JSON.stringify(body) })
+  const res: ProxyResponse = proxyUrl
+    ? await proxyFetch(apiUrl, { method: "POST", headers, body: JSON.stringify(body) }, proxyUrl)
     : await fetch(apiUrl, { method: "POST", headers, body: JSON.stringify(body) })
         .then(r => ({ ok: r.ok, status: r.status, text: () => r.text(), json: () => r.json() }));
 
@@ -745,7 +797,7 @@ interface NextEnrichment {
   commentCount?: string;
 }
 
-async function fetchNextData(videoId: string, useProxy: boolean): Promise<NextEnrichment> {
+async function fetchNextData(videoId: string, proxyUrl?: string): Promise<NextEnrichment> {
   try {
     const apiUrl = `https://www.youtube.com/youtubei/v1/next?key=${WEB_CLIENT.apiKey}&prettyPrint=false`;
     const body = {
@@ -768,8 +820,8 @@ async function fetchNextData(videoId: string, useProxy: boolean): Promise<NextEn
       "X-YouTube-Client-Name": WEB_CLIENT.clientId,
       "X-YouTube-Client-Version": WEB_CLIENT.clientVersion,
     };
-    const res: ProxyResponse = useProxy && process.env.PROXY_URL
-      ? await proxyFetch(apiUrl, { method: "POST", headers: nextHeaders, body: JSON.stringify(body) })
+    const res: ProxyResponse = proxyUrl
+      ? await proxyFetch(apiUrl, { method: "POST", headers: nextHeaders, body: JSON.stringify(body) }, proxyUrl)
       : await fetch(apiUrl, { method: "POST", headers: nextHeaders, body: JSON.stringify(body) })
           .then(r => ({ ok: r.ok, status: r.status, text: () => r.text(), json: () => r.json() }));
     if (!res.ok) return {};
@@ -884,65 +936,77 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
     ...(ytCookies ? [WEB_CLIENT] : []),
   ];
 
+  // YTDL_DEBUG=1 traces which exit and client answered.
+  const debug = process.env.YTDL_DEBUG === "1";
+
   let lastErr: Error | null = null;
-  let coreInfo: Omit<VideoInfo, "proxied"> | null = null;
-  let usedProxy = false;
+  let coreInfo: CoreInfo | null = null;
+  let usedNode: number | null = null;
 
   // Returns true when a result has at least one adaptive (video-only or audio-only) format.
   // Muxed-only results are saved as a fallback but we keep trying for adaptive streams.
-  function hasAdaptive(info: Omit<VideoInfo, "proxied">): boolean {
+  function hasAdaptive(info: CoreInfo): boolean {
     return info.formats.some(f => f.type === "video" || f.type === "audio");
   }
 
-  // When a residential PROXY_URL is configured, lead with it: from datacenter
-  // hosts (e.g. Vercel) the direct path is always bot-blocked by YouTube, so
-  // trying the proxy first avoids ~1.5s of guaranteed-failing direct calls.
-  const proxyConfigured = !!process.env.PROXY_URL;
+  // Lead with the pool; the direct path is bot-blocked from datacenter hosts.
+  // A second exit covers a node that has since died, without spending the
+  // function's whole time budget walking the pool.
+  const MAX_EXIT_ATTEMPTS = 2;
+  const exits = vlessEnabled() ? shuffledNodes().slice(0, MAX_EXIT_ATTEMPTS) : [];
 
-  // Run a client list; updates coreInfo/usedProxy via closure. Returns early
-  // once an adaptive (video-only or audio-only) result is found, or the content
-  // is genuinely unavailable, so the remaining clients are skipped.
-  async function runClients(clients: YoutubeClient[], useProxy: boolean): Promise<void> {
+  // Run a client list against one exit (or directly when node is null).
+  // Updates coreInfo/usedNode via closure, and returns early once an adaptive
+  // result is found or the content is genuinely unavailable.
+  async function runClients(clients: YoutubeClient[], node: number | null): Promise<void> {
+    const proxyUrl = node === null ? undefined : proxyUrlFor(node) ?? undefined;
     for (const client of clients) {
       try {
-        const info = await fetchViaInnertube(videoId, client, useProxy);
+        const info = await fetchViaInnertube(videoId, client, proxyUrl);
+        if (debug) {
+          console.error(`[ytdl] node=${node} ${client.clientName} -> ${info.formats.length} formats`);
+        }
         if (info.formats.length > 0) {
           const better = !coreInfo || hasAdaptive(info);
-          if (better) { coreInfo = info; usedProxy = useProxy; }
+          if (better) { coreInfo = info; usedNode = node; }
           if (hasAdaptive(info)) return; // got adaptive streams — no need to try more
         }
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         lastErr = e;
+        if (debug) console.error(`[ytdl] node=${node} ${client.clientName} !! ${e.message}`);
         const m = e.message.toLowerCase();
         const isContentError = m.includes("video unavailable") || m.includes("private video") ||
           m.includes("has been removed") || m.includes("not available in your country");
         if (isContentError) return;
         // Direct path: a non-retryable error is fatal. Proxy path: always advance
         // to the next client (a proxy/network error must not stop the others).
-        if (!useProxy && !shouldTryNext(e.message)) throw e;
+        if (node === null && !shouldTryNext(e.message)) throw e;
       }
     }
   }
 
-  // ── Phase 1: Proxy fetch (primary on datacenter hosts) ───────────────────
-  if (proxyConfigured) {
-    await runClients(proxyClients, true);
+  // ── Phase 1: VLESS exits (primary on datacenter hosts) ───────────────────
+  for (const node of exits) {
+    await runClients(proxyClients, node);
+    if (coreInfo && hasAdaptive(coreInfo)) break; // this exit answered; stop burning nodes
   }
 
-  // ── Phase 2: Direct fetch (fallback, or sole path when no proxy is set) ───
+  // ── Phase 2: Direct fetch (fallback, or sole path when no pool is set) ────
   if (!coreInfo || !hasAdaptive(coreInfo)) {
-    await runClients(directClients, false);
+    await runClients(directClients, null);
   }
 
   // ── Phase 3: Page-scrape fallback ────────────────────────────────────────
   if (!coreInfo || !hasAdaptive(coreInfo)) {
-    for (const useProxy of (proxyConfigured ? [true, false] : [false])) {
+    const scrapeRoutes: (number | null)[] = exits.length ? [exits[0], null] : [null];
+    for (const node of scrapeRoutes) {
       try {
-        const info = await fetchViaPageScrape(videoId, useProxy);
+        const proxyUrl = node === null ? undefined : proxyUrlFor(node) ?? undefined;
+        const info = await fetchViaPageScrape(videoId, proxyUrl);
         if (info.formats.length > 0) {
           const better = !coreInfo || hasAdaptive(info);
-          if (better) { coreInfo = info; usedProxy = useProxy; }
+          if (better) { coreInfo = info; usedNode = node; }
           if (hasAdaptive(info)) break;
         }
       } catch { /* try next */ }
@@ -953,7 +1017,9 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
 
   // ── Phase 4: Enrich with viewCount, publishDate, subscribers, comments ────
   // Single "next" API call — non-blocking, failures return empty object.
-  const enrichment = await fetchNextData(videoId, usedProxy);
+  // Reuses the same exit.
+  const enrichProxy = usedNode === null ? undefined : proxyUrlFor(usedNode) ?? undefined;
+  const enrichment = await fetchNextData(videoId, enrichProxy);
 
   return {
     ...coreInfo,
@@ -962,7 +1028,8 @@ export async function getVideoInfo(urlOrId: string): Promise<VideoInfo> {
     publishDate: enrichment.publishDate || coreInfo.publishDate,
     subscriberCount: enrichment.subscriberCount,
     commentCount: enrichment.commentCount,
-    proxied: usedProxy,
+    proxied: usedNode !== null,
+    node: usedNode ?? undefined,
   };
 }
 

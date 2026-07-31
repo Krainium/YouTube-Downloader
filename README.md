@@ -10,6 +10,10 @@ Hits YouTube's internal Innertube API the same way the official apps do. Pulls e
 
 A privacy-first YouTube downloader that runs entirely in your browser. No sign-in, no tracking, no file upload.
 
+![Web app](frontend1.png)
+
+![Formats and dubbed audio picker](frontend.png)
+
 ### Features
 
 - **Smart Merge** — merges a high-quality video-only stream with audio using ffmpeg compiled to WebAssembly, completely in-browser. Supports up to 4K.
@@ -26,11 +30,36 @@ A privacy-first YouTube downloader that runs entirely in your browser. No sign-i
 4. If the video has dubbed tracks, a **language dropdown** appears — choose the audio language.
 5. Hit **Merge & Download**. ffmpeg loads (cached after first use), fetches both streams, muxes them in-browser, and saves `Title [1080p] [Hindi].mp4` to your downloads.
 
+### Extraction routing
+
+YouTube bot-blocks datacenter IPs, so the deployed app does not call YouTube from Vercel directly. Xray-core runs inside the same container as the Next.js server and exposes one local HTTP proxy port per VLESS node.
+
+```
+Vercel container
+├── Xray-core      127.0.0.1:10809+i  →  VLESS/REALITY  →  exit IP i
+└── Next.js        picks an exit per request
+```
+
+A request picks a random exit, retries on another if the first is refused, and the chosen node index travels with the response so `/api/stream` downloads through the same exit — YouTube signs CDN URLs against the requesting IP.
+
+The node list reads at boot from the `VLESS_NODES` environment variable, one `vless://` URI per line. See `web/.env.example`.
+
+| Variable | Purpose |
+|---|---|
+| `VLESS_NODES` | Node list, one URI per line (required) |
+| `XRAY_BASE_PORT` | First local proxy port, default `10809` |
+| `PROXY_TIMEOUT_MS` | Per-request tunnel timeout, default `20000` |
+| `YTDL_DEBUG` | Set to `1` to log which exit and client answered |
+
+Deployment is a container build (`web/Dockerfile.vercel`) rather than the default Next.js build, because Xray has to run alongside the server.
+
 ---
 
 ## CLI Tool
 
 Download any YouTube video or audio directly from the terminal — no API key, no dependencies.
+
+![CLI](terminal.png)
 
 ### Run it
 

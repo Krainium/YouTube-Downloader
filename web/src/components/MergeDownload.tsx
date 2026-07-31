@@ -154,6 +154,8 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
       await ff.load(coreURL, wasmURL);
 
       const proxied  = info.proxied ? "1" : "0";
+      // Pins both fetches to the exit that issued the URLs.
+      const node     = info.node !== undefined ? `&node=${info.node}` : "";
       const videoMB  = selectedVideo.contentLength
         ? Math.round(parseInt(selectedVideo.contentLength) / 1024 / 1024) : "?";
       const audioMB  = selectedAudio.contentLength
@@ -161,7 +163,7 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
 
       setPhase("fetching-video");
       setStatusMsg(`Fetching video (~${videoMB} MB)...`);
-      const videoProxy = `/api/stream?url=${encodeURIComponent(selectedVideo.url)}&filename=video.mp4&proxied=${proxied}`;
+      const videoProxy = `/api/stream?url=${encodeURIComponent(selectedVideo.url)}&filename=video.mp4&proxied=${proxied}${node}`;
       const videoBytes = await fetchBytes(videoProxy, p => {
         setProgress(Math.round(p * 50));
         setStatusMsg(`Fetching video (~${videoMB} MB)… ${Math.round(p * 100)}%`);
@@ -170,7 +172,7 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
       setPhase("fetching-audio");
       const langLabel = hasDubbedTracks ? ` [${selectedLang?.displayName ?? "audio"}]` : "";
       setStatusMsg(`Fetching audio${langLabel} (~${audioMB} MB)...`);
-      const audioProxy = `/api/stream?url=${encodeURIComponent(selectedAudio.url)}&filename=audio.m4a&proxied=${proxied}`;
+      const audioProxy = `/api/stream?url=${encodeURIComponent(selectedAudio.url)}&filename=audio.m4a&proxied=${proxied}${node}`;
       const audioBytes = await fetchBytes(audioProxy, p => {
         setProgress(50 + Math.round(p * 10));
         setStatusMsg(`Fetching audio${langLabel} (~${audioMB} MB)… ${Math.round(p * 100)}%`);

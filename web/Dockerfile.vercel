@@ -1,0 +1,44 @@
+# Next.js and Xray-core in one image. They must share a container: Xray listens
+# on 127.0.0.1, and the exit pinning needs /api/info and /api/stream served by
+# the same instance.
+
+FROM node:22-alpine AS builder
+WORKDIR /build
+COPY package.json package-lock.json* ./
+RUN npm install --no-audit --no-fund
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM node:22-alpine AS runner
+
+# Xray-core is a static Go binary, so musl/Alpine is fine.
+ARG XRAY_VERSION=v26.3.27
+RUN apk add --no-cache ca-certificates \
+ && apk add --no-cache --virtual .fetch curl unzip \
+ && curl -fsSL -o /tmp/xray.zip \
+      "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip" \
+ && unzip -oq /tmp/xray.zip -d /usr/local/bin xray \
+ && chmod +x /usr/local/bin/xray \
+ && rm -f /tmp/xray.zip \
+ && apk del .fetch
+
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# `output: "standalone"` emits server.js plus a pruned node_modules; static
+# assets are not included and must be copied separately.
+COPY --from=builder /build/.next/standalone ./
+COPY --from=builder /build/.next/static ./.next/static
+COPY --from=builder /build/public ./public
+
+COPY vless ./vless
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
+
+ENV PORT=80
+ENV HOSTNAME=0.0.0.0
+EXPOSE 80
+
+CMD ["./docker-entrypoint.sh"]

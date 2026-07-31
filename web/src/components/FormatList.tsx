@@ -54,8 +54,10 @@ export default function FormatList({ info }: Props) {
       const safeName = info.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 60).trim();
       const filename = `${safeName}.${ext}`;
       const proxied = info.proxied ? "1" : "0";
+      // Pins the download to the exit that issued the URL.
+      const node = info.node !== undefined ? `&node=${info.node}` : "";
       const proxyUrl =
-        `/api/stream?url=${encodeURIComponent(fmt.url)}&filename=${encodeURIComponent(filename)}&proxied=${proxied}`;
+        `/api/stream?url=${encodeURIComponent(fmt.url)}&filename=${encodeURIComponent(filename)}&proxied=${proxied}${node}`;
       const a = document.createElement("a");
       a.href = proxyUrl;
       a.download = filename;
