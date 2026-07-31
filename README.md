@@ -10,6 +10,8 @@ Hits YouTube's internal Innertube API the same way the official apps do. Pulls e
 
 A privacy-first YouTube downloader that runs entirely in your browser. No sign-in, no tracking, no file upload.
 
+![Web app](frontend.png)
+
 ### Features
 
 - **Smart Merge** — merges a high-quality video-only stream with audio using ffmpeg compiled to WebAssembly, completely in-browser. Supports up to 4K.
@@ -54,6 +56,8 @@ Deployment is a container build (`web/Dockerfile.vercel`) rather than the defaul
 ## CLI Tool
 
 Download any YouTube video or audio directly from the terminal — no API key, no dependencies.
+
+![CLI](terminal.png)
 
 ### Run it
 
