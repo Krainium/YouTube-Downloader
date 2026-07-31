@@ -246,7 +246,7 @@ export default function Home() {
         {/* Footer */}
         <footer className="relative z-10 border-t border-border/40 py-6">
           <div className="max-w-2xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-muted">
-            <span>Built by <a href="https://github.com/Krainium" className="text-sub hover:text-text transition-colors" rel="noopener noreferrer">Krainium</a></span>
+            <span>Built by <a href="https://github.com/Krainium" target="_blank" className="text-sub hover:text-text transition-colors" rel="noopener noreferrer">Krainium</a></span>
           </div>
         </footer>
       </div>
