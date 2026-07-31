@@ -79,7 +79,7 @@ export default function Header() {
           {/* Nav */}
           <div className="hidden md:flex items-center gap-6 text-sm">
             <a
-              href="https://github.com/Krainium/youtube"
+              href="https://github.com/Krainium/YouTube-Downloader"
               target="_blank"
               rel="noopener noreferrer"
               className="text-sub hover:text-text transition-colors flex items-center gap-1.5"
