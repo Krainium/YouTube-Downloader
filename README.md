@@ -1,4 +1,4 @@
-# youtube
+# YouTube Downloader
 
 > Download any YouTube video or audio directly — CLI tool and full-featured web app.
 
