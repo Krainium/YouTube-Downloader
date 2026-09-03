@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
 const TICKER_TEXT = "✦  Pricing coming soon  ✦  Pricing coming soon  ✦  Pricing coming soon  ✦  Pricing coming soon  ✦  Pricing coming soon  ✦  Pricing coming soon  ✦";
 
 export default function Header() {
@@ -13,7 +15,7 @@ export default function Header() {
     let alive = true;
     const check = async () => {
       try {
-        const r = await fetch("/api/health", { cache: "no-store" });
+        const r = await fetch(`${API_BASE}/api/health`, { cache: "no-store" });
         const j = await r.json();
         if (alive) setOnline(!!j.online);
       } catch {
