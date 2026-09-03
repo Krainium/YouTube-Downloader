@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import type { VideoFormat, VideoInfo } from "@/lib/innertube";
 import { humanSize, mimeToExt, getCodec } from "@/lib/innertube";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
 const MergeDownload = dynamic(() => import("./MergeDownload"), { ssr: false });
 
 interface Props {
@@ -57,7 +59,7 @@ export default function FormatList({ info }: Props) {
       // Pins the download to the exit that issued the URL.
       const node = info.node !== undefined ? `&node=${info.node}` : "";
       const proxyUrl =
-        `/api/stream?url=${encodeURIComponent(fmt.url)}&filename=${encodeURIComponent(filename)}&proxied=${proxied}${node}`;
+        `${API_BASE}/api/stream?url=${encodeURIComponent(fmt.url)}&filename=${encodeURIComponent(filename)}&proxied=${proxied}${node}`;
       const a = document.createElement("a");
       a.href = proxyUrl;
       a.download = filename;

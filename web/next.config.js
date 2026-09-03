@@ -2,7 +2,7 @@
 const nextConfig = {
   // Emits .next/standalone/server.js so the container can run the app without
   // the full node_modules tree. Required by Dockerfile.vercel.
-  output: "standalone",
+  output: process.env.VERCEL ? undefined : "standalone",
 
   serverExternalPackages: ["undici"],
 
