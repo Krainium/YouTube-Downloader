@@ -7,6 +7,8 @@ import VideoCard from "@/components/VideoCard";
 import FormatList from "@/components/FormatList";
 import type { VideoInfo } from "@/lib/innertube";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
 export default function Home() {
   const [splashDone, setSplashDone] = useState(false);
   const [url, setUrl] = useState("");
@@ -22,7 +24,7 @@ export default function Home() {
     setError(null);
     setInfo(null);
     try {
-      const res = await fetch("/api/info", {
+      const res = await fetch(API_BASE + "/api/info", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: trimmed }),

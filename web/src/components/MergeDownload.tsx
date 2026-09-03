@@ -3,6 +3,8 @@
 import { useRef, useState, useMemo } from "react";
 import type { VideoFormat, VideoInfo } from "@/lib/innertube";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
 interface Props {
   info: VideoInfo;
   videoFormats: VideoFormat[];
@@ -163,7 +165,7 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
 
       setPhase("fetching-video");
       setStatusMsg(`Fetching video (~${videoMB} MB)...`);
-      const videoProxy = `/api/stream?url=${encodeURIComponent(selectedVideo.url)}&filename=video.mp4&proxied=${proxied}${node}`;
+      const videoProxy = `${API_BASE}/api/stream?url=${encodeURIComponent(selectedVideo.url)}&filename=video.mp4&proxied=${proxied}${node}`;
       const videoBytes = await fetchBytes(videoProxy, p => {
         setProgress(Math.round(p * 50));
         setStatusMsg(`Fetching video (~${videoMB} MB)… ${Math.round(p * 100)}%`);
@@ -172,7 +174,7 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
       setPhase("fetching-audio");
       const langLabel = hasDubbedTracks ? ` [${selectedLang?.displayName ?? "audio"}]` : "";
       setStatusMsg(`Fetching audio${langLabel} (~${audioMB} MB)...`);
-      const audioProxy = `/api/stream?url=${encodeURIComponent(selectedAudio.url)}&filename=audio.m4a&proxied=${proxied}${node}`;
+      const audioProxy = `${API_BASE}/api/stream?url=${encodeURIComponent(selectedAudio.url)}&filename=audio.m4a&proxied=${proxied}${node}`;
       const audioBytes = await fetchBytes(audioProxy, p => {
         setProgress(50 + Math.round(p * 10));
         setStatusMsg(`Fetching audio${langLabel} (~${audioMB} MB)… ${Math.round(p * 100)}%`);
