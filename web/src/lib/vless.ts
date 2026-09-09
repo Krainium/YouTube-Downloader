@@ -6,6 +6,7 @@
 // /api/stream takes it back.
 
 const BASE_PORT = Number(process.env.XRAY_BASE_PORT || 10809);
+const PROXY_HOST = process.env.XRAY_PROXY_HOST || "127.0.0.1";
 const PROXY_USER = process.env.XRAY_PROXY_USER || "ytdl";
 const PROXY_PASS = process.env.XRAY_PROXY_PASS || "local";
 
@@ -18,10 +19,10 @@ export function vlessEnabled(): boolean {
   return poolSize() > 0;
 }
 
-/** Local proxy URL for an exit, or null if the index is out of range. */
+/** Proxy URL for an exit, or null if the index is out of range. */
 export function proxyUrlFor(index: number): string | null {
   if (!Number.isInteger(index) || index < 0 || index >= poolSize()) return null;
-  return `http://${PROXY_USER}:${PROXY_PASS}@127.0.0.1:${BASE_PORT + index}`;
+  return `http://${PROXY_USER}:${PROXY_PASS}@${PROXY_HOST}:${BASE_PORT + index}`;
 }
 
 /**
