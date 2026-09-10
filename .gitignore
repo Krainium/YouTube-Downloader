@@ -4,7 +4,7 @@ downloaded videos/
 downloaded audios/
 *.tmp
 
-# secrets – never commit
+
 .env
 .env.*
 .env.local
