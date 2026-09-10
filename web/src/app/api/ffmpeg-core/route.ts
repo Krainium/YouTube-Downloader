@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-// UMD build — loadable via importScripts() in a classic Worker (no ES modules needed)
 const CDN_UMD = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.9/dist/umd";
 
 const ALLOWED: Record<string, string> = {
@@ -29,7 +28,9 @@ export async function GET(req: NextRequest) {
     status: 200,
     headers: {
       "Content-Type": contentType,
-      "Cache-Control": "public, max-age=31536000, immutable",
+      // s-maxage: Vercel CDN edge caches this — new users served from edge after first ever request
+      // max-age: browser caches permanently — repeat users never hit network again
+      "Cache-Control": "public, s-maxage=31536000, max-age=31536000, immutable",
       "Access-Control-Allow-Origin": "*",
       "Cross-Origin-Resource-Policy": "cross-origin",
     },
