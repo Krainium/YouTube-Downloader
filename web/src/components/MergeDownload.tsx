@@ -149,8 +149,8 @@ export default function MergeDownload({ info, videoFormats, audioFormats }: Prop
       ff.onProgress = (ratio) => setProgress(Math.min(99, Math.round(ratio * 100)));
 
       const origin  = window.location.origin;
-      const coreURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.9/dist/umd/ffmpeg-core.js";
-      const wasmURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.9/dist/umd/ffmpeg-core.wasm";
+      const coreURL = `${process.env.NEXT_PUBLIC_FFMPEG_CDN}/ffmpeg-core.js`;
+      const wasmURL = `${process.env.NEXT_PUBLIC_FFMPEG_CDN}/ffmpeg-core.wasm`;
 
       setStatusMsg("Loading ffmpeg engine (cached after first use)...");
       await ff.load(coreURL, wasmURL);
