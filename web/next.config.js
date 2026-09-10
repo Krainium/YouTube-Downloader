@@ -3,20 +3,11 @@ const nextConfig = {
   output: process.env.VERCEL ? undefined : "standalone",
   serverExternalPackages: ["undici"],
 
-  async redirects() {
-    if (!process.env.VERCEL) return [];
-    const base = process.env.NEXT_PUBLIC_API_BASE;
-    if (!base) return [];
-    return [{ source: "/api/:path*", destination: base + "/api/:path*", permanent: false }];
-  },
-
   webpack: (config, { isServer, webpack }) => {
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
-        fs: false,
-        path: false,
-        crypto: false,
+        fs: false, path: false, crypto: false,
       };
       config.plugins.push(
         new webpack.NormalModuleReplacementPlugin(
