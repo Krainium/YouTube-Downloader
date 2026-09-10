@@ -3,3 +3,9 @@ ytdl.exe
 downloaded videos/
 downloaded audios/
 *.tmp
+
+
+.env
+.env.*
+.env.local
+web/cookies.txt
